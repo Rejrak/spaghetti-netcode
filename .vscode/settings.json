@@ -1,0 +1,10 @@
+{
+    "protoc": {
+        "path": "protoc",
+        "compile_on_save": true,
+        "options": [
+            "-I=c:\\Users\\lucch\\OneDrive\\Desktop\\spaghetti-netcode\\shared",
+            "--go_out=internal",
+        ]
+    }
+}
