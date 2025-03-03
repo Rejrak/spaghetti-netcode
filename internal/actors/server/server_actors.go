@@ -1,28 +1,18 @@
-package main
+package server
 
 import (
 	"encoding/hex"
-	"flag"
 	"fmt"
 	"log/slog"
 	"net"
-	"os"
-	"os/signal"
 	"reflect"
-	"spaghetti/server/pkg/packets"
+	"spaghetti/internal/pkg/packets"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/anthdm/hollywood/actor"
 	"google.golang.org/protobuf/proto"
 )
-
-// TODO 1 Aggiungere un campo "tipo" (o "opcode") al messaggio wrapper:
-// In questo modo, puoi includere un enum o una stringa che indichi esplicitamente il tipo di messaggio. Il ricevente legge questo campo e decide quale struttura utilizzare per l'unmarshal.
-// OPPURE
-// Utilizzare il tipo google.protobuf.Any:
-// Con il tipo Any puoi incapsulare messaggi arbitrari. Il campo Any contiene un campo type_url che specifica il tipo del messaggio incapsulato, permettendoti di usare poi la funzione di unpacking per ottenere il tipo corretto.
 
 type handler struct{}
 
@@ -126,7 +116,7 @@ type server struct {
 	mutex      sync.Mutex
 }
 
-func newServer(listenAddr string) actor.Producer {
+func NewServer(listenAddr string) actor.Producer {
 	return func() actor.Receiver {
 		return &server{
 			listenAddr: listenAddr,
@@ -152,26 +142,17 @@ func (s *server) Receive(c *actor.Context) {
 		}
 		s.ln = ln
 		c.SpawnChild(newHandler, "handler", actor.WithID("default"))
-	
+
 	case *packets.Packet:
 		s.mutex.Lock()
 		defer s.mutex.Unlock()
 		fmt.Printf("🔹 Ricevuto pacchetto: %+v\n", msg)
-		
+
 		data, err := packets.ToBytes(msg)
 		if err != nil {
 			slog.Error("failed to serialize packet", slog.Attr{Key: "err", Value: slog.AnyValue(err)})
 			return
 		}
-		// Prepend the length of the data as a 4-byte prefix
-		dataLen := len(data)
-		prefix := []byte{
-			byte(dataLen >> 24),
-			byte(dataLen >> 16),
-			byte(dataLen >> 8),
-			byte(dataLen),
-		}
-		data = append(prefix, data...)
 		for pid, conn := range s.sessions {
 			fmt.Printf("🔹 Invio pacchetto a: %s\n connessione %v", pid, conn)
 			_, err := conn.Write(data)
@@ -184,11 +165,20 @@ func (s *server) Receive(c *actor.Context) {
 		slog.Info("server started", "addr", s.listenAddr)
 		go s.acceptLoop(c)
 	case actor.Stopped:
-		// on stop all the childs sessions will automatically get the stop
-		// message and close all their underlying connection.
+		break
 	case *connAdd:
 		slog.Debug("added new connection to my map", "addr", msg.conn.RemoteAddr(), "pid", msg.pid)
 		s.sessions[msg.pid] = msg.conn
+		packet := &packets.Packet{}
+		packet.SenderId = msg.pid.GetID()
+		packet.Msg = packets.NewChat("init_client")
+
+		data, err := packets.ToBytes(packet)
+		if err != nil {
+			slog.Error("failed to serialize packet", slog.Attr{Key: "err", Value: slog.AnyValue(err)})
+		}
+		s.sessions[msg.pid].Write(data)
+
 	case *connRem:
 		slog.Debug("removed connection from my map", "pid", msg.pid)
 		delete(s.sessions, msg.pid)
@@ -210,20 +200,4 @@ func (s *server) acceptLoop(c *actor.Context) {
 			conn: conn,
 		})
 	}
-}
-
-func main() {
-	listenAddr := flag.String("listenaddr", ":6000", "listen address of the TCP server")
-
-	e, err := actor.NewEngine(actor.NewEngineConfig())
-	if err != nil {
-		panic(err)
-	}
-	serverPID := e.Spawn(newServer(*listenAddr), "server")
-
-	sigch := make(chan os.Signal, 1)
-	signal.Notify(sigch, syscall.SIGINT, syscall.SIGTERM)
-	<-sigch
-
-	<-e.Poison(serverPID).Done()
 }

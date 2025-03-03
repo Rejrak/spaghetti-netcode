@@ -16,7 +16,7 @@ func NewChat(msg string) Msg {
 	}
 }
 
-func NewId(id uint64) Msg {
+func NewId(id uint64 ) Msg {
 	return &Packet_Id{
 		Id: &IdMessage{
 			Id: id,
