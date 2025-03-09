@@ -1,12 +1,13 @@
 package server
 
 import (
-	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"math"
+	"math/rand"
 	"net"
-	"reflect"
 	"spaghetti/internal/pkg/packets"
+	"strconv"
 	"sync"
 	"time"
 
@@ -22,29 +23,31 @@ func newHandler() actor.Receiver {
 
 func (handler) Receive(c *actor.Context) {
 	switch msg := c.Message().(type) {
-	case []byte:
-		packet := &packets.Packet{}
-		err := proto.Unmarshal(msg, packet)
-		if err != nil {
-			slog.Info("error unmarshalling data: %v", err)
-		}
-		switch x := packet.Msg.(type) {
-		case *packets.Packet_Chat:
-			// Il messaggio è di tipo ChatMessage, puoi accedere a x.Chat
-			fmt.Println("Received chat message:", x.Chat.Msg)
-		case *packets.Packet_Id:
-			// Il messaggio è di tipo IdMessage, puoi accedere a x.Id
-			fmt.Println("Received id message:", x.Id.Id)
-		default:
-			fmt.Println("Tipo di messaggio non riconosciuto")
-		}
-		c.Send(c.Parent(), packet)
+	case actor.Started:
+		fmt.Printf("\nHandler started with PID: %v", c.PID())
 	case actor.Stopped:
 		for i := 0; i < 3; i++ {
 			fmt.Printf("\r handler stopping in %d", 3-i)
 			time.Sleep(time.Second)
 		}
-		fmt.Println("handler stopped")
+		fmt.Println("\nhandler stopped")
+	case []byte:
+		packet := &packets.Packet{}
+		err := proto.Unmarshal(msg, packet)
+		if err != nil {
+			slog.Info("\nerror unmarshalling data: %v", err)
+		}
+		switch pckg := packet.Msg.(type) {
+		case *packets.Packet_Chat:
+			fmt.Println("\nReceived chat message:", pckg.Chat.Msg)
+			c.Send(c.Parent(), pckg)
+		case *packets.Packet_Position:
+			fmt.Println("\nReceived Position message:", pckg.Position)
+			c.Send(c.Parent(), pckg)
+		default:
+			fmt.Println("\nTipo di messaggio non riconosciuto")
+		}
+
 	}
 }
 
@@ -61,22 +64,38 @@ func newSession(conn net.Conn) actor.Producer {
 }
 
 func (s *session) Receive(c *actor.Context) {
-	switch c.Message().(type) {
-	case *packets.Packet:
-		slog.Info("Sending packet back")
 
-	case actor.Initialized:
+	switch msg := c.Message().(type) {
 	case actor.Started:
+		c.SpawnChild(newHandler, "handler", actor.WithID("session"))
 		slog.Info("new connection", "addr", s.conn.RemoteAddr())
 		go s.readLoop(c)
 	case actor.Stopped:
 		s.conn.Close()
+	case *packets.Packet_Chat:
+		switch msg.Chat.Msg {
+		case "toggle_torch":
+			slog.Info("Sending packet back")
+			var packet = &packets.Packet{Msg: msg, SenderId: c.PID().ID}
+			data, err := packets.ToBytes(packet)
+			if err != nil {
+				slog.Error("failed to serialize packet", slog.Attr{Key: "err", Value: slog.AnyValue(err)})
+				return
+			}
+			if _, err := s.conn.Write(data); err != nil {
+				panic(err)
+			}
+		default:
+			slog.Error("unrecognized command")
+		}
+
 	}
 }
 
 func (s *session) readLoop(c *actor.Context) {
 	buf := make([]byte, 1024)
 	var dataBuffer []byte
+	var handlerPID = fmt.Sprintf("%s/handler/session", c.PID().ID)
 	for {
 		n, err := s.conn.Read(buf)
 		if err != nil {
@@ -93,7 +112,7 @@ func (s *session) readLoop(c *actor.Context) {
 				break
 			}
 			packetBytes := dataBuffer[4 : 4+msgLen]
-			c.Send(c.Parent().Child("handler/default"), packetBytes)
+			c.Send(c.Child(handlerPID), packetBytes)
 			dataBuffer = dataBuffer[4+msgLen:]
 		}
 	}
@@ -101,6 +120,7 @@ func (s *session) readLoop(c *actor.Context) {
 }
 
 type connAdd struct {
+	sid  int
 	pid  *actor.PID
 	conn net.Conn
 }
@@ -128,56 +148,29 @@ func NewServer(listenAddr string) actor.Producer {
 func (s *server) Receive(c *actor.Context) {
 	fmt.Printf("🔹 Ricevuto messaggio di tipo: %T\n", c.Message())
 	fmt.Printf("🔹 Valore messaggio: %+v\n", c.Message())
-	if data, ok := c.Message().([]byte); ok {
-		fmt.Printf("🔹 Decodifica stringa: %q\n", string(data))
-		fmt.Printf("🔹 Dati in esadecimale: %s\n", hex.EncodeToString(data))
-	}
-	fmt.Printf("🔹 Dettagli reflection: %+v\n", reflect.ValueOf(c.Message()))
 
 	switch msg := c.Message().(type) {
-	case actor.Initialized:
+	case actor.Started:
 		ln, err := net.Listen("tcp", s.listenAddr)
 		if err != nil {
 			panic(err)
 		}
 		s.ln = ln
-		c.SpawnChild(newHandler, "handler", actor.WithID("default"))
-
-	case *packets.Packet:
-		s.mutex.Lock()
-		defer s.mutex.Unlock()
-		fmt.Printf("🔹 Ricevuto pacchetto: %+v\n", msg)
-
-		data, err := packets.ToBytes(msg)
-		if err != nil {
-			slog.Error("failed to serialize packet", slog.Attr{Key: "err", Value: slog.AnyValue(err)})
-			return
-		}
-		for pid, conn := range s.sessions {
-			fmt.Printf("🔹 Invio pacchetto a: %s\n connessione %v", pid, conn)
-			_, err := conn.Write(data)
-			if err != nil {
-				slog.Error("failed to write to connection", "err", err)
-			}
-		}
-
-	case actor.Started:
 		slog.Info("server started", "addr", s.listenAddr)
 		go s.acceptLoop(c)
 	case actor.Stopped:
 		break
 	case *connAdd:
-		slog.Debug("added new connection to my map", "addr", msg.conn.RemoteAddr(), "pid", msg.pid)
+		slog.Info("added new connection to my map", "addr", msg.conn.RemoteAddr(), "pid", msg.pid)
 		s.sessions[msg.pid] = msg.conn
-		packet := &packets.Packet{}
-		packet.SenderId = msg.pid.GetID()
-		packet.Msg = packets.NewChat("init_client")
-
+		var packet = &packets.Packet{}
+		packet.SenderId = msg.pid.ID
 		data, err := packets.ToBytes(packet)
 		if err != nil {
-			slog.Error("failed to serialize packet", slog.Attr{Key: "err", Value: slog.AnyValue(err)})
+			slog.Error("Failed to  send init message", err)
 		}
-		s.sessions[msg.pid].Write(data)
+		time.Sleep(time.Millisecond * 100)
+		msg.conn.Write(data)
 
 	case *connRem:
 		slog.Debug("removed connection from my map", "pid", msg.pid)
@@ -194,8 +187,10 @@ func (s *server) acceptLoop(c *actor.Context) {
 			slog.Error("accept error", "err", err)
 			break
 		}
-		pid := c.SpawnChild(newSession(conn), "session", actor.WithID(conn.RemoteAddr().String()))
+		sid := rand.Intn(math.MaxInt)
+		pid := c.SpawnChild(newSession(conn), "session", actor.WithID(strconv.Itoa(sid)))
 		c.Send(c.PID(), &connAdd{
+			sid:  sid,
 			pid:  pid,
 			conn: conn,
 		})
