@@ -16,10 +16,12 @@ func NewChat(msg string) Msg {
 	}
 }
 
-func NewId(id uint64 ) Msg {
-	return &Packet_Id{
-		Id: &IdMessage{
-			Id: id,
+func NewPosition(x, y, z float32) Msg {
+	return &Packet_Position{
+		Position: &Position{
+			X: x,
+			Y: y,
+			Z: z,
 		},
 	}
 }

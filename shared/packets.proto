@@ -8,10 +8,16 @@ message ChatMessage { string msg = 1; }
 
 message IdMessage { uint64 id = 1; }
 
+message Position {
+    float x = 1;
+    float y = 2;
+    float z = 3;
+}
+
 message Packet {
     string sender_id = 1;
     oneof msg {
         ChatMessage chat = 2;
-        IdMessage id = 3;
+        Position position = 3;
     }
 }
