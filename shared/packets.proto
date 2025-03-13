@@ -14,10 +14,47 @@ message Position {
     float z = 3;
 }
 
+//il login e la gestione delle room
+message LoginRequest {
+    string username = 1;
+}
+message LoginResponse {
+    string sender_id = 1;
+    string message = 2; // es. "login ok"
+}
+message CreateRoomRequest {
+    string room_id = 1;
+}
+message CreateRoomResponse {
+    string room_id = 1;
+    bool success = 2;
+    string message = 3;
+}
+message JoinRoomRequest {
+    string room_id = 1;
+}
+message JoinRoomResponse {
+    string room_id = 1;
+    bool success = 2;
+    string message = 3;
+}
+message RoomListRequest {}
+message RoomListResponse {
+    repeated string room_ids = 1;
+}
+
 message Packet {
     string sender_id = 1;
     oneof msg {
         ChatMessage chat = 2;
         Position position = 3;
+        LoginRequest login = 4;
+        LoginResponse login_response = 5;
+        CreateRoomRequest create_room = 6;
+        CreateRoomResponse create_room_response = 7;
+        JoinRoomRequest join_room = 8;
+        JoinRoomResponse join_room_response = 9;
+        RoomListRequest room_list_request = 10;
+        RoomListResponse room_list_response = 11;
     }
 }
