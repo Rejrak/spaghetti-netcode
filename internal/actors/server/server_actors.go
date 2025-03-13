@@ -15,6 +15,38 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+type roomManager struct {
+	rooms map[string]*actor.PID
+	mutex sync.Mutex
+}
+
+func newRoomManager() actor.Receiver {
+	return &roomManager{
+		rooms: make(map[string]*actor.PID),
+	}
+}
+
+func (*roomManager) Receive(c *actor.Context) {
+	switch msg := c.Message().(type) {
+	case *packets.Packet:
+		switch m := msg.Msg.(type) {
+		case *packets.Packet_Login:
+			fmt.Println("RoomManager: Login Request for user: ", m.Login.Username)
+			response := &packets.Packet{
+				SenderId: c.PID().ID,
+				Msg: &packets.Packet_LoginResponse{
+					LoginResponse: &packets.LoginResponse{
+						SenderId: c.PID().ID,
+						Message:  "Login OK",
+					},
+				},
+			}
+			c.Send(c.Sender(), response)
+		}
+
+	}
+}
+
 type handler struct{}
 
 func newHandler() actor.Receiver {
@@ -35,15 +67,18 @@ func (handler) Receive(c *actor.Context) {
 		packet := &packets.Packet{}
 		err := proto.Unmarshal(msg, packet)
 		if err != nil {
-			slog.Info("\nerror unmarshalling data: %v", err)
+			slog.Info("\nerror unmarshalling data: %v", slog.Attr{Key: "Error", Value: slog.AnyValue(err)})
 		}
-		switch pckg := packet.Msg.(type) {
+
+		switch m := packet.Msg.(type) {
 		case *packets.Packet_Chat:
-			fmt.Println("\nReceived chat message:", pckg.Chat.Msg)
-			c.Send(c.Parent(), pckg)
+			fmt.Println("\nHandler: Received chat message:", m.Chat.Msg)
+			c.Send(c.Parent(), m)
 		case *packets.Packet_Position:
-			fmt.Println("\nReceived Position message:", pckg.Position)
-			c.Send(c.Parent(), pckg)
+			fmt.Println("\nHandler: Received Position message:", m.Position)
+			c.Send(c.Parent(), m)
+		case *packets.Packet_Login:
+			fmt.Println("Handler: Received login request for user: ", m.Login)
 		default:
 			fmt.Println("\nTipo di messaggio non riconosciuto")
 		}
