@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package packets;
 
-option go_package = "pkg/packets";
+option go_package = "pkg/cmPackets";
 
 message AuthMessage {
     string address = 1;
