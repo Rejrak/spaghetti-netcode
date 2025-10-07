@@ -12,11 +12,25 @@ type ForceSync struct{} // chiedi uno sync immediato
 type Tick struct{} // tick interno
 
 type Config struct {
-	PollInterval  time.Duration // ogni quanto controllare
-	StaleAfter    time.Duration // dati locali considerati stantii
-	MaxBatch      int           // numero massimo di address per ciclo
-	RemoteBaseURL string        // es. http://127.0.0.1:8080
-	RemoteTimeout time.Duration // timeout per la HTTP call
-	DBPath        string        // path SQLite
-	Logf          func(format string, args ...any)
+	DBPath string
+	Logf   func(format string, args ...any)
+
+	// polling
+	PollInterval time.Duration
+	StaleAfter   time.Duration
+	MaxBatch     int
+
+	// timeout per le chiamate remote
+	RemoteTimeout time.Duration
+
+	// === Backend "vecchio" HTTP (ancora supportato) ===
+	RemoteBaseURL string
+
+	// === Backend Keycloak (nuovo) ===
+	KeycloakBaseURL             string // es: https://keycloak.example.com
+	KeycloakRealm               string // es: myrealm
+	KeycloakClientID            string // es: spaghetti-service
+	KeycloakClientSecret        string
+	KeycloakWalletAttributeName string // opzionale, default: "walletAddress"
+	KeycloakEnableWalletLookup  bool   // se true, cerca utente anche per attributo wallet
 }
