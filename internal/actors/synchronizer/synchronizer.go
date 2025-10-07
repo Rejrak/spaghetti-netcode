@@ -4,9 +4,12 @@ import (
 	"context"
 	"fmt"
 	"spaghetti/internal/remote"
+	kc "spaghetti/internal/remote/keycloak"
 	"spaghetti/internal/storage/sqlite"
 	"spaghetti/internal/user"
 	"time"
+
+	"log"
 
 	"github.com/anthdm/hollywood/actor"
 )
@@ -68,8 +71,19 @@ func (s *Syncronizer) onStart(c *actor.Context) {
 	}
 	s.repo = repo
 
-	if s.cfg.RemoteBaseURL != "" {
-		s.remote = remote.NewHTTPClient(s.cfg.RemoteBaseURL, s.cfg.RemoteTimeout)
+	if s.cfg.KeycloakBaseURL != "" && s.cfg.KeycloakRealm != "" && s.cfg.KeycloakClientID != "" {
+		s.dbg("using Keycloak remote backend (%s / %s)", s.cfg.KeycloakBaseURL, s.cfg.KeycloakRealm)
+		s.remote = kc.NewKeycloakClient(kc.KeycloakConfig{
+			BaseURL:                     s.cfg.KeycloakBaseURL,
+			Realm:                       s.cfg.KeycloakRealm,
+			ClientID:                    s.cfg.KeycloakClientID,
+			ClientSecret:                s.cfg.KeycloakClientSecret,
+			Timeout:                     s.cfg.RemoteTimeout,
+			EnableWalletAttributeLookup: s.cfg.KeycloakEnableWalletLookup,
+			WalletAttributeName:         s.cfg.KeycloakWalletAttributeName,
+		})
+	} else {
+		s.dbg("no remote backend configured")
 	}
 
 	// ticker → manda Tick a se stesso
@@ -104,6 +118,51 @@ func (s *Syncronizer) onRegisterAddress(c *actor.Context, m RegisterAddress) {
 }
 
 func (s *Syncronizer) runSyncOnce(c *actor.Context) {
+	// --- FULL SYNC (se il remote lo supporta) ---
+	type allUsersCap interface {
+		FetchAllUsers(ctx context.Context) ([]*user.User, error)
+	}
+	if au, ok := s.remote.(allUsersCap); ok {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		all, err := au.FetchAllUsers(ctx)
+		cancel()
+		if err != nil {
+			s.dbg("FetchAllUsers error: %v", err)
+		} else if len(all) > 0 {
+			// 1) batch CRUD
+			batchCRUD := make(map[string]*user.Attributes, len(all))
+			// 2) batch roles+perms
+			batchRP := make([]sqlite.RolesPermsRow, 0, len(all))
+
+			for _, u := range all {
+				if u == nil || u.Attrs == nil || u.Address == "" {
+					continue
+				}
+				batchCRUD[u.Address] = &user.Attributes{
+					CanCreate: u.Attrs.CanCreate,
+					CanRead:   u.Attrs.CanRead,
+					CanUpdate: u.Attrs.CanUpdate,
+					CanDelete: u.Attrs.CanDelete,
+				}
+				batchRP = append(batchRP, sqlite.RolesPermsRow{
+					Address: u.Address,
+					Roles:   append([]string(nil), u.Attrs.Roles...),
+					Perms:   u.Attrs.Perms,
+				})
+			}
+
+			if err := s.repo.UpsertAttrsBatch(context.Background(), batchCRUD); err != nil {
+				s.dbg("UpsertAttrsBatch error: %v", err)
+			}
+			if err := s.repo.ReplaceManyUsersRolesPerms(context.Background(), batchRP); err != nil {
+				s.dbg("ReplaceManyUsersRolesPerms error: %v", err)
+			} else {
+				s.dbg("full sync from remote (batch): n=%d", len(batchRP))
+			}
+		}
+	}
+
+	// --- poi il tuo ciclo "stale" di sempre ---
 	stale := time.Now().Add(-s.cfg.StaleAfter)
 	if s.cfg.StaleAfter <= 0 {
 		stale = time.Now().Add(-30 * time.Minute)
@@ -127,42 +186,39 @@ func (s *Syncronizer) runSyncOnce(c *actor.Context) {
 
 	s.dbg("stale batch n=%d", len(addresses))
 	for _, addr := range addresses {
-		s.syncOne(c, addr)
+		s.syncOne(c, addr) // questo aggiorna CRUD; se vuoi aggiornare anche roles/perms qui, vedi sotto
 	}
 }
 
 func (s *Syncronizer) syncOne(c *actor.Context, address string) {
-	// 1) prova fetch remoto se configurato
 	var attrs *user.Attributes
 	var err error
 
 	if s.remote != nil {
 		rctx, rcancel := context.WithTimeout(context.Background(), s.cfg.RemoteTimeout)
 		attrs, err = s.remote.FetchAttributes(rctx, address)
+		log.Default().Printf("Fetched remote attrs for %s: %v (err=%v)", address, s.fmtAttrs(attrs), err)
 		rcancel()
 	}
 
 	switch {
 	case err == nil && attrs != nil:
-		// 2) persistiamo subito
-		if perr := s.repo.UpsertAttrs(context.Background(), address, attrs); perr != nil {
-			s.dbg("UpsertAttrs(%s) error: %v", address, perr)
+		if perr := s.repo.UpsertAttrsExtended(context.Background(), address, attrs); perr != nil {
+			s.dbg("UpsertAttrsExtended(%s) error: %v", address, perr)
 		} else {
-			s.dbg("updated attrs from remote for %s", address)
+			s.dbg("updated attrs+roles+perms from remote for %s", address)
 		}
 	default:
-		// 3) fallback: resta con dati locali
-		_, updatedAt, ok, gerr := s.repo.GetAttrs(context.Background(), address)
+		// fallback locale (come avevi)
+		_, updatedAt, ok, gerr := s.repo.GetAttrsExtended(context.Background(), address)
 		if gerr != nil {
 			s.dbg("GetAttrs(%s) error: %v", address, gerr)
 			return
 		}
 		if !ok {
-			// utente non presente: lo lasciamo senza attrs, verrà ripreso al prossimo giro
 			s.dbg("no local attrs for %s and remote unavailable", address)
 			return
 		}
-		// dati esistenti: li teniamo (eventual consistency)
 		s.dbg("kept local attrs for %s (remote err: %v, last=%s)", address, err, time.Unix(updatedAt, 0).UTC())
 	}
 }
