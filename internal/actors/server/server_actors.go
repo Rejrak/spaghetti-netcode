@@ -44,16 +44,26 @@ func NewServer(listenAddr string) actor.Producer {
 
 func (s *server) startSyncronizer(c *actor.Context) {
 	cfg := synchronizer.Config{
-		PollInterval:  30 * time.Second,
-		StaleAfter:    30 * time.Minute,
-		MaxBatch:      200,
-		RemoteBaseURL: "http://127.0.0.1:8080",
-		RemoteTimeout: 800 * time.Millisecond,
-		DBPath:        "./authblock.db",
+		DBPath: "./authblock.db",
+
 		Logf: func(format string, args ...any) {
 			fmt.Printf(format+"\n", args...)
 		},
+		PollInterval: 15 * time.Second,
+		StaleAfter:   30 * time.Second,
+		MaxBatch:     200,
+
+		RemoteTimeout: 3 * time.Second,
+
+		// Keycloak
+		KeycloakBaseURL:            "http://localhost:8080",
+		KeycloakRealm:              "cosmos",
+		KeycloakClientID:           "spaghetti-service",
+		KeycloakClientSecret:       "nA3XmI7wgHnxdXepKGgMkJz66tyUbviJ",
+		KeycloakEnableWalletLookup: true,
+		// KeycloakWalletAttributeName: "walletAddress", // default già gestito
 	}
+
 	props := actor.Producer(func() actor.Receiver {
 		return synchronizer.NewSyncronizer(cfg)
 	})
