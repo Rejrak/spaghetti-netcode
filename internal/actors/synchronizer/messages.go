@@ -13,9 +13,7 @@ type Tick struct{} // tick interno
 
 type Config struct {
 	DBPath string
-	Logf   func(format string, args ...any)
 
-	// polling
 	PollInterval time.Duration
 	StaleAfter   time.Duration
 	MaxBatch     int
@@ -23,10 +21,6 @@ type Config struct {
 	// timeout per le chiamate remote
 	RemoteTimeout time.Duration
 
-	// === Backend "vecchio" HTTP (ancora supportato) ===
-	RemoteBaseURL string
-
-	// === Backend Keycloak (nuovo) ===
 	KeycloakBaseURL             string // es: https://keycloak.example.com
 	KeycloakRealm               string // es: myrealm
 	KeycloakClientID            string // es: spaghetti-service

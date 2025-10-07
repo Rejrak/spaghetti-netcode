@@ -44,11 +44,7 @@ func NewServer(listenAddr string) actor.Producer {
 
 func (s *server) startSyncronizer(c *actor.Context) {
 	cfg := synchronizer.Config{
-		DBPath: "./authblock.db",
-
-		Logf: func(format string, args ...any) {
-			fmt.Printf(format+"\n", args...)
-		},
+		DBPath:       "./authblock.db",
 		PollInterval: 15 * time.Second,
 		StaleAfter:   30 * time.Second,
 		MaxBatch:     200,
@@ -72,12 +68,12 @@ func (s *server) startSyncronizer(c *actor.Context) {
 }
 
 func (s *server) Receive(c *actor.Context) {
-	fmt.Printf("-> Ricevuto messaggio di tipo: %T\n", c.Message())
-	fmt.Printf("-> Valore messaggio: %+v\n", c.Message())
+	fmt.Printf("[server]-> Ricevuto messaggio di tipo: %T\n", c.Message())
+	fmt.Printf("[server]-> Valore messaggio: %+v\n", c.Message())
 
 	switch msg := c.Message().(type) {
 	case string:
-		fmt.Printf("-> Ricevuto messaggio di tipo string dal syncronizer: %s\n", msg)
+		fmt.Printf("[server]-> Ricevuto messaggio di tipo string dal syncronizer: %s\n", msg)
 	case actor.Started:
 		s.startSyncronizer(c)
 		ln, err := net.Listen("tcp", s.listenAddr)
@@ -85,27 +81,27 @@ func (s *server) Receive(c *actor.Context) {
 			panic(err)
 		}
 		s.ln = ln
-		slog.Info("server started", "addr", s.listenAddr)
+		slog.Info("[server]-> server started", "addr", s.listenAddr)
 		go s.acceptLoop(c)
 	case actor.Stopped:
 		break
 	case *connAdd:
-		slog.Info("added new connection to my map", "addr", msg.conn.RemoteAddr(), "pid", msg.pid)
+		slog.Info("[server]-> added new connection to my map", "addr", msg.conn.RemoteAddr(), "pid", msg.pid)
 		s.sessions[msg.pid] = msg.conn
 		var packet = &packets.Packet{}
 		packet.SenderId = msg.pid.ID
 		data, err := packets.ToBytes(packet)
 		if err != nil {
-			slog.Error("Failed to  send init message", err)
+			slog.Error("[server]-> Failed to  send init message", err)
 		}
 		time.Sleep(time.Millisecond * 100)
 		msg.conn.Write(data)
 
 	case *connRem:
-		slog.Debug("removed connection from my map", "pid", msg.pid)
+		slog.Debug("[server]-> removed connection from my map", "pid", msg.pid)
 		delete(s.sessions, msg.pid)
 	default:
-		slog.Warn("unknown message", "msg", msg)
+		slog.Warn("[server]-> unknown message", "msg", msg)
 	}
 }
 
@@ -113,7 +109,7 @@ func (s *server) acceptLoop(c *actor.Context) {
 	for {
 		conn, err := s.ln.Accept()
 		if err != nil {
-			slog.Error("accept error", "err", err)
+			slog.Error("[server]-> accept error", "err", err)
 			break
 		}
 		sid := rand.Intn(math.MaxInt)

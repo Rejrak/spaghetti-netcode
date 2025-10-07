@@ -24,26 +24,26 @@ func newHandler() actor.Receiver {
 func (handler) Receive(c *actor.Context) {
 	switch msg := c.Message().(type) {
 	case actor.Started:
-		fmt.Printf("\nHandler started with PID: %v", c.PID())
+		slog.Info("[handler]-> started with PID: %v", c.PID())
 	case actor.Stopped:
 		for i := 0; i < 1; i++ {
-			fmt.Printf("\r handler %v stopping in %d", c.PID(), 1-i)
+			slog.Info("\r[handler]-> stopping in %d", 1-i)
 			time.Sleep(time.Second)
 		}
-		fmt.Println("\nhandler stopped")
+		slog.Info("[handler]-> stopped")
 	case []byte:
 		packet := &packets.CosmosPacket{}
 		err := proto.Unmarshal(msg, packet)
 		if err != nil {
-			slog.Info("\nerror unmarshalling data: %v", slog.Attr{Key: "Error", Value: slog.AnyValue(err)})
+			slog.Info("[handler]-> error unmarshalling data: %v", slog.Attr{Key: "Error", Value: slog.AnyValue(err)})
 		}
 
 		switch m := packet.Msg.(type) {
 		case *packets.CosmosPacket_AuthMessage:
-			fmt.Println("\nHandler: Received auth message:", m)
+			slog.Info("[handler]-> received auth message:", m)
 			c.Send(c.Parent(), m.AuthMessage)
 		default:
-			fmt.Println("\nTipo di messaggio non riconosciuto")
+			slog.Info("[handler]-> unrecognized message type in CosmosPacket:", slog.Any("type", fmt.Sprintf("%T", m)))
 		}
 
 	}
@@ -66,16 +66,16 @@ func newSession(conn net.Conn) actor.Producer {
 func (s *session) readUserAttributes(c context.Context, address string) (*user.Attributes, error) {
 	repo, err := sqlite.Open("./authblock.db")
 	if err != nil {
-		slog.Info("sqlite open error: %v", err)
+		slog.Info("[session]-> sqlite open error: %v", err)
 		return nil, err
 	}
 	s.repo = repo
 	userAttrs, updated, ok, err := s.repo.GetAttrsExtended(c, address)
 	if err != nil {
-		slog.Error("Failed to get user attributes", "err", err)
+		slog.Error("[session]-> Failed to get user attributes", "err", err)
 		return nil, err
 	}
-	slog.Info("Address Attrs", "attrs", userAttrs, "updated", updated, "ok", ok, "err", err)
+	slog.Info("[session]-> Address Attrs", "attrs", userAttrs, "updated", updated, "ok", ok, "err", err)
 	if !ok {
 		s.repo.EnsureAddress(c, address, "")
 		return nil, fmt.Errorf("attributes not found")
@@ -88,12 +88,12 @@ func (s *session) Receive(c *actor.Context) {
 	switch msg := c.Message().(type) {
 	case actor.Started:
 		c.SpawnChild(newHandler, "handler", actor.WithID("session"))
-		slog.Info("new connection", "addr", s.conn.RemoteAddr())
+		slog.Info("[session]-> new connection", "addr", s.conn.RemoteAddr())
 		go s.readLoop(c)
 	case actor.Stopped:
 		s.conn.Close()
 	case *packets.CosmosPacket:
-		slog.Info("Handler: Received Cosmos packet:", msg)
+		slog.Info("[session]-> Handler: Received Cosmos packet:", msg)
 	case *packets.AuthMessage:
 		userAttrs, _ := s.readUserAttributes(c.Context(), msg.Address)
 		response := s.checkOperationAndPermissions(msg.Operation, userAttrs)
@@ -103,13 +103,13 @@ func (s *session) Receive(c *actor.Context) {
 		}
 		data, err := packets.CosmosPacketToBytes(resp)
 		if err != nil {
-			slog.Error("failed to serialize response", "err", err)
+			slog.Error("[session]-> failed to serialize response", "err", err)
 			return
 		}
 		if _, err := s.conn.Write(data); err != nil {
-			slog.Error("write failed", "err", err)
+			slog.Error("[session]-> write failed", "err", err)
 		}
-		slog.Info("Response Sended", "err", err)
+		slog.Info("[session]-> Response Sended", "err", err)
 
 	}
 }
@@ -138,7 +138,7 @@ func (s *session) readLoop(c *actor.Context) {
 	for {
 		n, err := s.conn.Read(buf)
 		if err != nil {
-			slog.Error("conn read error", "err", err)
+			slog.Error("[session]-> conn read error", "err", err)
 			break
 		}
 		dataBuffer = append(dataBuffer, buf[:n]...)

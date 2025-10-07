@@ -12,6 +12,7 @@ import (
 	"log"
 
 	"github.com/anthdm/hollywood/actor"
+	"golang.org/x/exp/slog"
 )
 
 // Parent -> Server
@@ -28,7 +29,7 @@ type Syncronizer struct {
 func (s *Syncronizer) Receive(c *actor.Context) {
 	switch msg := c.Message().(type) {
 	case actor.Started:
-		s.dbg("Syncronizer started with PID: %v", c.PID())
+		s.dbg("[sync] started with PID: %v", c.PID())
 		s.onStart(c)
 
 	case actor.Stopped:
@@ -38,7 +39,7 @@ func (s *Syncronizer) Receive(c *actor.Context) {
 		s.onRegisterAddress(c, msg)
 
 	case ForceSync:
-		// s.runSyncOnce(c)
+		s.runSyncOnce(c)
 	case Tick:
 		s.runSyncOnce(c)
 
@@ -55,9 +56,7 @@ func NewSyncronizer(cfg Config) actor.Receiver {
 }
 
 func (s *Syncronizer) dbg(format string, args ...any) {
-	if s.cfg.Logf != nil {
-		s.cfg.Logf("[sync] --> "+format, args...)
-	}
+	slog.Info("[sync] --> "+format, args...)
 }
 
 func (s *Syncronizer) onStart(c *actor.Context) {
@@ -86,7 +85,7 @@ func (s *Syncronizer) onStart(c *actor.Context) {
 		s.dbg("no remote backend configured")
 	}
 
-	// ticker → manda Tick a se stesso
+	// ticker -> manda Tick a se stesso
 	interval := s.cfg.PollInterval
 	if interval <= 0 {
 		interval = 30 * time.Second
@@ -96,7 +95,7 @@ func (s *Syncronizer) onStart(c *actor.Context) {
 
 func (s *Syncronizer) onStop(c *actor.Context) {
 	for i := 0; i < 1; i++ {
-		s.dbg("Syncronizer %v stopping in %d", c.PID(), 1-i)
+		s.dbg("%v stopping in %d", c.PID(), 1-i)
 		time.Sleep(time.Second)
 	}
 	close(s.stopCh)
@@ -113,7 +112,7 @@ func (s *Syncronizer) onRegisterAddress(c *actor.Context, m RegisterAddress) {
 		s.dbg("EnsureAddress(%s) error: %v", m.Address, err)
 		return
 	}
-	// opzionale: tenta subito un refresh di quell’indirizzo
+	// opzionale? provo subito un refresh di quell’indirizzo
 	s.syncOne(c, m.Address)
 }
 
@@ -129,9 +128,8 @@ func (s *Syncronizer) runSyncOnce(c *actor.Context) {
 		if err != nil {
 			s.dbg("FetchAllUsers error: %v", err)
 		} else if len(all) > 0 {
-			// 1) batch CRUD
 			batchCRUD := make(map[string]*user.Attributes, len(all))
-			// 2) batch roles+perms
+
 			batchRP := make([]sqlite.RolesPermsRow, 0, len(all))
 
 			for _, u := range all {
@@ -162,7 +160,6 @@ func (s *Syncronizer) runSyncOnce(c *actor.Context) {
 		}
 	}
 
-	// --- poi il tuo ciclo "stale" di sempre ---
 	stale := time.Now().Add(-s.cfg.StaleAfter)
 	if s.cfg.StaleAfter <= 0 {
 		stale = time.Now().Add(-30 * time.Minute)
@@ -186,7 +183,7 @@ func (s *Syncronizer) runSyncOnce(c *actor.Context) {
 
 	s.dbg("stale batch n=%d", len(addresses))
 	for _, addr := range addresses {
-		s.syncOne(c, addr) // questo aggiorna CRUD; se vuoi aggiornare anche roles/perms qui, vedi sotto
+		s.syncOne(c, addr)
 	}
 }
 
@@ -209,7 +206,6 @@ func (s *Syncronizer) syncOne(c *actor.Context, address string) {
 			s.dbg("updated attrs+roles+perms from remote for %s", address)
 		}
 	default:
-		// fallback locale (come avevi)
 		_, updatedAt, ok, gerr := s.repo.GetAttrsExtended(context.Background(), address)
 		if gerr != nil {
 			s.dbg("GetAttrs(%s) error: %v", address, gerr)

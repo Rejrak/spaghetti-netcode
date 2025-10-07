@@ -29,6 +29,8 @@ type roleCache struct {
 	byID map[string]*roleRep
 }
 
+var globalRoleCache = &roleCache{byID: map[string]*roleRep{}}
+
 type KeycloakConfig struct {
 	BaseURL      string // es: https://keycloak.example.com
 	Realm        string // es: myrealm
@@ -50,7 +52,6 @@ type KeycloakClient struct {
 	exp   time.Time
 }
 
-// Costruttore
 func NewKeycloakClient(cfg KeycloakConfig) *KeycloakClient {
 	if cfg.WalletAttributeName == "" {
 		cfg.WalletAttributeName = "walletAddress"
@@ -83,11 +84,9 @@ func (kc *KeycloakClient) getUserRealmRoles(ctx context.Context, token, userID s
 	if err := json.NewDecoder(resp.Body).Decode(&roles); err != nil {
 		return nil, err
 	}
-	log.Default().Printf("[Keycloak] --> user %s has %d realm roles", userID, len(roles))
+	// log.Default().Printf("[Keycloak] --> user %s has %d realm roles", userID, len(roles))
 	return roles, nil
 }
-
-var globalRoleCache = &roleCache{byID: map[string]*roleRep{}}
 
 func (kc *KeycloakClient) getRoleByID(ctx context.Context, token, roleID string) (*roleRep, error) {
 	// cache read
@@ -120,11 +119,12 @@ func (kc *KeycloakClient) getRoleByID(ctx context.Context, token, roleID string)
 	if r.Attributes == nil {
 		r.Attributes = map[string][]string{}
 	}
+
 	// cache write
 	globalRoleCache.mu.Lock()
 	globalRoleCache.byID[roleID] = &r
 	globalRoleCache.mu.Unlock()
-	log.Default().Printf("[Keycloak] --> loaded role %s (%s) with %d attributes", r.Name, r.ID, len(r.Attributes))
+	// log.Default().Printf("[Keycloak] --> loaded role %s (%s) with %d attributes", r.Name, r.ID, len(r.Attributes))
 	return &r, nil
 }
 
@@ -170,9 +170,9 @@ func (kc *KeycloakClient) collectRoleAttributes(ctx context.Context, token, user
 				}
 			}
 		}
-		log.Printf("[Keycloak] --> role %s attributes: %+v", def.Name, def.Attributes)
+		// log.Printf("[Keycloak] --> role %s attributes: %+v", def.Name, def.Attributes)
 	}
-	log.Default().Printf("[Keycloak] --> user %s roles: %v", userID, roleNames)
+	// log.Default().Printf("[Keycloak] --> user %s roles: %v", userID, roleNames)
 	return roleNames, perms, crud, nil
 }
 
@@ -203,13 +203,13 @@ func (kc *KeycloakClient) FetchAttributes(ctx context.Context, address string) (
 		return &user.Attributes{CanCreate: false, CanRead: false, CanUpdate: false, CanDelete: false}, nil
 	}
 
-	// 1) Attributi a livello UTENTE
+	// 1 - Attributi a livello UTENTE
 	out := mapUserAttrsToCRUD(u.Attributes)
 	if out.Perms == nil {
 		out.Perms = map[string]bool{}
 	}
 
-	// 2) Ruoli → roleNames + permessi supply.* + eventuali CRUD dai ruoli
+	// 2 - Ruoli → roleNames + permessi supply.* + eventuali CRUD dai ruoli
 	roleNames, rolePerms, roleCRUD, err := kc.collectRoleAttributes(ctx, tok, u.ID)
 	if err != nil {
 		return nil, err
@@ -234,7 +234,7 @@ func (kc *KeycloakClient) FetchAttributes(ctx context.Context, address string) (
 	if roleCRUD["canDelete"] {
 		out.CanDelete = true
 	}
-	log.Default().Printf("[Keycloak] --> user %s roles: %v", address, roleNames)
+	// log.Default().Printf("[Keycloak] --> user %s roles: %v", address, roleNames)
 	out.Roles = roleNames
 	return out, nil
 }
@@ -269,7 +269,6 @@ func (kc *KeycloakClient) FetchAllUsers(ctx context.Context) ([]*user.User, erro
 				attrs.Perms = map[string]bool{}
 			}
 
-			// arricchisci con RUOLI (nome + attributi ruolo)
 			roleNames, rolePerms, roleCRUD, err := kc.collectRoleAttributes(ctx, tok, ku.ID)
 			if err != nil {
 				return nil, err
@@ -296,7 +295,7 @@ func (kc *KeycloakClient) FetchAllUsers(ctx context.Context) ([]*user.User, erro
 			out = append(out, &user.User{
 				Session: "", Address: address, Attrs: attrs,
 			})
-			log.Default().Printf("[Keycloak] --> user %s roles: %v perms: %v", address, roleNames, attrs.Perms)
+			// log.Default().Printf("[Keycloak] --> user %s roles: %v perms: %v", address, roleNames, attrs.Perms)
 		}
 
 		start += len(users)
@@ -304,7 +303,7 @@ func (kc *KeycloakClient) FetchAllUsers(ctx context.Context) ([]*user.User, erro
 			break
 		}
 	}
-	log.Default().Printf("[Keycloak] --> fetched %d users", len(out))
+	// log.Default().Printf("[Keycloak] --> fetched %d users", len(out))
 	return out, nil
 }
 
@@ -387,12 +386,11 @@ func (kc *KeycloakClient) listUsers(ctx context.Context, token string, first, ma
 	if err := json.NewDecoder(resp.Body).Decode(&users); err != nil {
 		return nil, err
 	}
-	log.Default().Printf("[Keycloak] --> fetched %d users", len(users))
+	// log.Default().Printf("[Keycloak] --> fetched %d users", len(users))
 	return users, nil
 }
 
 func (kc *KeycloakClient) findUserByExactUsername(ctx context.Context, token, username string) (*kcUser, error) {
-	// exact match: ?username=<user>&exact=true&briefRepresentation=true
 	params := url.Values{
 		"username":            {username},
 		"exact":               {"true"},
@@ -425,13 +423,10 @@ func (kc *KeycloakClient) findUserByExactUsername(ctx context.Context, token, us
 	if len(users) == 1 {
 		return &users[0], nil
 	}
-	log.Default().Printf("[Keycloak] --> found %d users for username %s", len(users), username)
+	// log.Default().Printf("[Keycloak] --> found %d users for username %s", len(users), username)
 	return nil, nil
 }
 
-// Ricerca per attributo (Keycloak moderne supportano q=attributes.<name>:<value>).
-// Se la tua versione non lo supporta, fai prima una listUsers con filtro di search
-// e poi filtra client-side sugli Attributes.
 func (kc *KeycloakClient) findUserByAttribute(ctx context.Context, token, attr, value string) (*kcUser, error) {
 	q := url.Values{
 		"q":                   {fmt.Sprintf("attributes.%s:%s", attr, value)},
@@ -466,15 +461,13 @@ func (kc *KeycloakClient) findUserByAttribute(ctx context.Context, token, attr, 
 			return &u, nil
 		}
 	}
-	log.Default().Printf("[Keycloak] --> found %d users for attribute %s=%s", len(users), attr, value)
+	// log.Default().Printf("[Keycloak] --> found %d users for attribute %s=%s", len(users), attr, value)
 	return nil, nil
 }
 
 // ------------------ mapping attributi KC ⇒ tuoi Attributes ------------------
 
 func mapUserAttrsToCRUD(kcAttrs map[string][]string) *user.Attributes {
-	// puoi salvare in Keycloak questi attributi a livello utente:
-	// canCreate=true, canRead=true, canUpdate=false, canDelete=false
 	asBool := func(key string) bool {
 		vals := kcAttrs[key]
 		if len(vals) == 0 {
@@ -483,7 +476,7 @@ func mapUserAttrsToCRUD(kcAttrs map[string][]string) *user.Attributes {
 		v := strings.ToLower(strings.TrimSpace(vals[0]))
 		return v == "true" || v == "1" || v == "yes"
 	}
-	log.Default().Printf("[Keycloak] --> mapping user attributes: %v", kcAttrs)
+	// log.Default().Printf("[Keycloak] --> mapping user attributes: %v", kcAttrs)
 	return &user.Attributes{
 		CanCreate: asBool("canCreate"),
 		CanRead:   asBool("canRead"),
