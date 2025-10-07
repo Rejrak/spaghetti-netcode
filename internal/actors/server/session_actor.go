@@ -70,7 +70,7 @@ func (s *session) readUserAttributes(c context.Context, address string) (*user.A
 		return nil, err
 	}
 	s.repo = repo
-	userAttrs, updated, ok, err := s.repo.GetAttrs(c, address)
+	userAttrs, updated, ok, err := s.repo.GetAttrsExtended(c, address)
 	if err != nil {
 		slog.Error("Failed to get user attributes", "err", err)
 		return nil, err
@@ -96,14 +96,10 @@ func (s *session) Receive(c *actor.Context) {
 		slog.Info("Handler: Received Cosmos packet:", msg)
 	case *packets.AuthMessage:
 		userAttrs, _ := s.readUserAttributes(c.Context(), msg.Address)
+		response := s.checkOperationAndPermissions(msg.Operation, userAttrs)
 		resp := &packets.CosmosPacket{
 			SenderId: msg.Address,
-			Msg: &packets.CosmosPacket_ResponseMessage{
-				ResponseMessage: &packets.ResponseMessage{
-					Success: userAttrs.CanCreate,
-					Message: "",
-				},
-			},
+			Msg:      response,
 		}
 		data, err := packets.CosmosPacketToBytes(resp)
 		if err != nil {
@@ -113,8 +109,25 @@ func (s *session) Receive(c *actor.Context) {
 		if _, err := s.conn.Write(data); err != nil {
 			slog.Error("write failed", "err", err)
 		}
-
 		slog.Info("Response Sended", "err", err)
+
+	}
+}
+
+func (s *session) checkOperationAndPermissions(op string, attrs *user.Attributes) *packets.CosmosPacket_ResponseMessage {
+	switch op {
+	case "/cosmos.bank.v1beta1.MsgSend":
+		return &packets.CosmosPacket_ResponseMessage{
+			ResponseMessage: &packets.ResponseMessage{
+				Success: attrs.Perms["supply.harvest.create"],
+				Message: "Permission to send tokens",
+			}}
+	default:
+		return &packets.CosmosPacket_ResponseMessage{
+			ResponseMessage: &packets.ResponseMessage{
+				Success: true,
+				Message: "Unknown operation, allowing by default",
+			}}
 	}
 }
 
