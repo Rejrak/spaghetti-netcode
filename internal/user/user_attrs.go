@@ -5,6 +5,9 @@ type Attributes struct {
 	CanRead   bool
 	CanUpdate bool
 	CanDelete bool
+
+	Perms map[string]bool `json:"perms,omitempty"`
+	Roles []string        `json:"roles,omitempty"`
 }
 
 type User struct {
@@ -17,6 +20,12 @@ func NewUser(session, address string) *User {
 	return &User{
 		Session: session,
 		Address: address,
-		Attrs:   nil,
 	}
+}
+
+func (u *User) Can(op string) bool {
+	if u == nil || u.Attrs == nil || u.Attrs.Perms == nil {
+		return false
+	}
+	return u.Attrs.Perms[op]
 }
