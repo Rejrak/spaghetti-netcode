@@ -193,8 +193,6 @@ LIMIT ?
 	return out, rows.Err()
 }
 
-// file: internal/storage/sqlite/sqlite.go
-
 func (r *Repo) UpsertAttrsBatch(ctx context.Context, rows map[string]*user.Attributes) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -273,7 +271,7 @@ func (r *Repo) ReplaceUserRolesPerms(ctx context.Context, address string, roles 
 		_ = stmtR.Close()
 	}
 
-	// inserisci permessi (solo true; se vuoi tenere anche false, inserisci value=0)
+	// inserisci permessi (inserisci sia true che false)
 	if len(perms) > 0 {
 		stmtP, err := tx.PrepareContext(ctx, `INSERT INTO user_perms(address, perm, value) VALUES(?, ?, ?)`)
 		if err != nil {
@@ -287,12 +285,9 @@ func (r *Repo) ReplaceUserRolesPerms(ctx context.Context, address string, roles 
 			if v {
 				val = 1
 			}
-			// puoi decidere: inserire solo i true (skip false) oppure tutti
-			if v {
-				if _, err := stmtP.ExecContext(ctx, address, p, val); err != nil {
-					_ = stmtP.Close()
-					return err
-				}
+			if _, err := stmtP.ExecContext(ctx, address, p, val); err != nil {
+				_ = stmtP.Close()
+				return err
 			}
 		}
 		_ = stmtP.Close()
