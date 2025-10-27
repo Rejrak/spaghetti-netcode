@@ -29,7 +29,7 @@ type roleCache struct {
 	byID map[string]*roleRep
 }
 
-var globalRoleCache = &roleCache{byID: map[string]*roleRep{}}
+// var globalRoleCache = &roleCache{byID: map[string]*roleRep{}}
 
 type KeycloakConfig struct {
 	BaseURL      string // es: https://keycloak.example.com
@@ -90,12 +90,12 @@ func (kc *KeycloakClient) getUserRealmRoles(ctx context.Context, token, userID s
 
 func (kc *KeycloakClient) getRoleByID(ctx context.Context, token, roleID string) (*roleRep, error) {
 	// cache read
-	globalRoleCache.mu.RLock()
-	if r := globalRoleCache.byID[roleID]; r != nil {
-		globalRoleCache.mu.RUnlock()
-		return r, nil
-	}
-	globalRoleCache.mu.RUnlock()
+	// globalRoleCache.mu.RLock()
+	// if r := globalRoleCache.byID[roleID]; r != nil {
+	// 	globalRoleCache.mu.RUnlock()
+	// 	return r, nil
+	// }
+	// globalRoleCache.mu.RUnlock()
 
 	endpoint := fmt.Sprintf("%s/admin/realms/%s/roles-by-id/%s",
 		strings.TrimRight(kc.cfg.BaseURL, "/"), kc.cfg.Realm, roleID)
@@ -121,9 +121,9 @@ func (kc *KeycloakClient) getRoleByID(ctx context.Context, token, roleID string)
 	}
 
 	// cache write
-	globalRoleCache.mu.Lock()
-	globalRoleCache.byID[roleID] = &r
-	globalRoleCache.mu.Unlock()
+	// globalRoleCache.mu.Lock()
+	// globalRoleCache.byID[roleID] = &r
+	// globalRoleCache.mu.Unlock()
 	// log.Default().Printf("[Keycloak] --> loaded role %s (%s) with %d attributes", r.Name, r.ID, len(r.Attributes))
 	return &r, nil
 }
@@ -156,11 +156,15 @@ func (kc *KeycloakClient) collectRoleAttributes(ctx context.Context, token, user
 		}
 
 		for k, vs := range def.Attributes {
-			// supply.* → permesso di dominio
+			// supply.* -> permesso di dominio
+			log.Default().Printf("[Keycloak] --> role %s attribute %s = %v", def.Name, k, vs)
 			if strings.HasPrefix(k, "supply.") {
 				if asBool(vs) {
 					perms[k] = true
-				} // OR
+				}
+				if !asBool(vs) {
+					perms[k] = false
+				}
 			}
 			// opzionale: abilita anche CRUD dai ruoli
 			switch k {
@@ -203,13 +207,11 @@ func (kc *KeycloakClient) FetchAttributes(ctx context.Context, address string) (
 		return &user.Attributes{CanCreate: false, CanRead: false, CanUpdate: false, CanDelete: false}, nil
 	}
 
-	// 1 - Attributi a livello UTENTE
 	out := mapUserAttrsToCRUD(u.Attributes)
 	if out.Perms == nil {
 		out.Perms = map[string]bool{}
 	}
 
-	// 2 - Ruoli → roleNames + permessi supply.* + eventuali CRUD dai ruoli
 	roleNames, rolePerms, roleCRUD, err := kc.collectRoleAttributes(ctx, tok, u.ID)
 	if err != nil {
 		return nil, err
@@ -234,8 +236,9 @@ func (kc *KeycloakClient) FetchAttributes(ctx context.Context, address string) (
 	if roleCRUD["canDelete"] {
 		out.CanDelete = true
 	}
-	// log.Default().Printf("[Keycloak] --> user %s roles: %v", address, roleNames)
 	out.Roles = roleNames
+	out.Perms = rolePerms
+	// log.Default().Printf("[Keycloak] --> user %s \n\troles: %v \n\tpermissions: %v", address, out.Roles, out.Perms)
 	return out, nil
 }
 

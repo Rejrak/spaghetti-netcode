@@ -112,12 +112,10 @@ func (s *Syncronizer) onRegisterAddress(c *actor.Context, m RegisterAddress) {
 		s.dbg("EnsureAddress(%s) error: %v", m.Address, err)
 		return
 	}
-	// opzionale? provo subito un refresh di quell’indirizzo
 	s.syncOne(c, m.Address)
 }
 
 func (s *Syncronizer) runSyncOnce(c *actor.Context) {
-	// --- FULL SYNC (se il remote lo supporta) ---
 	type allUsersCap interface {
 		FetchAllUsers(ctx context.Context) ([]*user.User, error)
 	}
@@ -136,17 +134,12 @@ func (s *Syncronizer) runSyncOnce(c *actor.Context) {
 				if u == nil || u.Attrs == nil || u.Address == "" {
 					continue
 				}
-				batchCRUD[u.Address] = &user.Attributes{
-					CanCreate: u.Attrs.CanCreate,
-					CanRead:   u.Attrs.CanRead,
-					CanUpdate: u.Attrs.CanUpdate,
-					CanDelete: u.Attrs.CanDelete,
-				}
 				batchRP = append(batchRP, sqlite.RolesPermsRow{
 					Address: u.Address,
 					Roles:   append([]string(nil), u.Attrs.Roles...),
 					Perms:   u.Attrs.Perms,
 				})
+				s.syncOne(c, u.Address)
 			}
 
 			if err := s.repo.UpsertAttrsBatch(context.Background(), batchCRUD); err != nil {
@@ -163,6 +156,7 @@ func (s *Syncronizer) runSyncOnce(c *actor.Context) {
 	stale := time.Now().Add(-s.cfg.StaleAfter)
 	if s.cfg.StaleAfter <= 0 {
 		stale = time.Now().Add(-30 * time.Minute)
+		// stale = time.Now().Add(-10 * time.Second)
 	}
 	limit := s.cfg.MaxBatch
 	if limit <= 0 {
