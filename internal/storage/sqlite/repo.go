@@ -271,7 +271,6 @@ func (r *Repo) ReplaceUserRolesPerms(ctx context.Context, address string, roles 
 		_ = stmtR.Close()
 	}
 
-	// inserisci permessi (inserisci sia true che false)
 	if len(perms) > 0 {
 		stmtP, err := tx.PrepareContext(ctx, `INSERT INTO user_perms(address, perm, value) VALUES(?, ?, ?)`)
 		if err != nil {
@@ -282,6 +281,7 @@ func (r *Repo) ReplaceUserRolesPerms(ctx context.Context, address string, roles 
 				continue
 			}
 			val := 0
+			// log.Default().Printf("[repo] --> Setting perm %s = %v for user %s", p, v, address)
 			if v {
 				val = 1
 			}
