@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"spaghetti/internal/pkg/packets"
+	"spaghetti/internal/remote/policy"
 	"spaghetti/internal/storage/sqlite"
 	"spaghetti/internal/user"
 	"time"
@@ -14,51 +15,18 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// Parents -> Server -> Session
-type handler struct{}
-
-func newHandler() actor.Receiver {
-	return &handler{}
-}
-
-func (handler) Receive(c *actor.Context) {
-	switch msg := c.Message().(type) {
-	case actor.Started:
-		slog.Info("[handler]-> started with PID: %v", c.PID())
-	case actor.Stopped:
-		for i := 0; i < 1; i++ {
-			slog.Info("\r[handler]-> stopping in %d", 1-i)
-			time.Sleep(time.Second)
-		}
-		slog.Info("[handler]-> stopped")
-	case []byte:
-		packet := &packets.CosmosPacket{}
-		err := proto.Unmarshal(msg, packet)
-		if err != nil {
-			slog.Info("[handler]-> error unmarshalling data: %v", slog.Attr{Key: "Error", Value: slog.AnyValue(err)})
-		}
-
-		switch m := packet.Msg.(type) {
-		case *packets.CosmosPacket_AuthMessage:
-			slog.Info("[handler]-> received auth message:", m)
-			c.Send(c.Parent(), m.AuthMessage)
-		default:
-			slog.Info("[handler]-> unrecognized message type in CosmosPacket:", slog.Any("type", fmt.Sprintf("%T", m)))
-		}
-
-	}
-}
-
 // Parents -> Server
 type session struct {
-	conn net.Conn
-	repo *sqlite.Repo
+	conn    net.Conn
+	repo    *sqlite.Repo
+	dynEval *policy.DynamicEvaluator
 }
 
-func newSession(conn net.Conn) actor.Producer {
+func newSession(conn net.Conn, dyn *policy.DynamicEvaluator) actor.Producer {
 	return func() actor.Receiver {
 		return &session{
-			conn: conn,
+			conn:    conn,
+			dynEval: dyn,
 		}
 	}
 }
@@ -66,7 +34,7 @@ func newSession(conn net.Conn) actor.Producer {
 func (s *session) readUserAttributes(c context.Context, address string) (*user.Attributes, error) {
 	repo, err := sqlite.Open("./authblock.db")
 	if err != nil {
-		slog.Info("[session]-> sqlite open error: %v", err)
+		slog.Info("[session]-> sqlite open error: %v", "err", err)
 		return nil, err
 	}
 	s.repo = repo
@@ -93,10 +61,10 @@ func (s *session) Receive(c *actor.Context) {
 	case actor.Stopped:
 		s.conn.Close()
 	case *packets.CosmosPacket:
-		slog.Info("[session]-> Handler: Received Cosmos packet:", msg)
+		slog.Info("[session]-> Handler: Received Cosmos packet:", "packet", msg)
 	case *packets.AuthMessage:
 		userAttrs, _ := s.readUserAttributes(c.Context(), msg.Address)
-		response := s.checkOperationAndPermissions(msg.Operation, userAttrs)
+		response := s.checkOperationAndPermissions(msg.Operation, userAttrs, msg)
 		resp := &packets.CosmosPacket{
 			SenderId: msg.Address,
 			Msg:      response,
@@ -114,23 +82,42 @@ func (s *session) Receive(c *actor.Context) {
 	}
 }
 
-func (s *session) checkOperationAndPermissions(op string, attrs *user.Attributes) *packets.CosmosPacket_ResponseMessage {
-	switch op {
-	case "/cosmos.bank.v1beta1.MsgSend":
-		return &packets.CosmosPacket_ResponseMessage{
-			ResponseMessage: &packets.ResponseMessage{
-				Success: attrs.Perms["supply.harvest.create"],
-				Message: "Permission to send tokens",
-			}}
-	default:
-		return &packets.CosmosPacket_ResponseMessage{
-			ResponseMessage: &packets.ResponseMessage{
-				Success: true,
-				Message: "Unknown operation, allowing by default",
-			}}
+func (s *session) checkOperationAndPermissions(op string, attrs *user.Attributes, msg *packets.AuthMessage) *packets.CosmosPacket_ResponseMessage {
+	// 1) static decision
+	// if deny, why := staticDeny(op, attrs); deny {
+	// 	return &packets.CosmosPacket_ResponseMessage{
+	// 		ResponseMessage: &packets.ResponseMessage{Success: false, Message: why},
+	// 	}
+	// }
+
+	// 2) dynamic (balance >= 500 token)
+	pc := &policy.Context{
+		Session:   "", // se ce l’hai
+		Address:   msg.Address,
+		Operation: op,
+		Resources: map[string]string{},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+
+	dec, _ := s.dynEval.Evaluate(ctx, pc)
+	return &packets.CosmosPacket_ResponseMessage{
+		ResponseMessage: &packets.ResponseMessage{
+			Success: dec.Allow,
+			Message: dec.Message,
+		},
 	}
 }
 
+func staticDeny(op string, attrs *user.Attributes) (bool, string) {
+	switch op {
+	case "/cosmos.bank.v1beta1.MsgSend":
+		if attrs.Perms["supply.harvest.create"] {
+			return true, "denied by static policy"
+		}
+	}
+	return false, ""
+}
 func (s *session) readLoop(c *actor.Context) {
 	buf := make([]byte, 1024)
 	var dataBuffer []byte
@@ -157,4 +144,39 @@ func (s *session) readLoop(c *actor.Context) {
 	}
 	c.Send(c.Parent(), &connRem{pid: c.PID()})
 	c.Engine().Poison(c.PID())
+}
+
+// Parents -> Server -> Session
+type handler struct{}
+
+func newHandler() actor.Receiver {
+	return &handler{}
+}
+
+func (handler) Receive(c *actor.Context) {
+	switch msg := c.Message().(type) {
+	case actor.Started:
+		slog.Info("[handler]-> started with PID: %v", "pid", c.PID())
+	case actor.Stopped:
+		for i := 0; i < 1; i++ {
+			slog.Info("\r[handler]-> stopping in %d", "i", 1-i)
+			time.Sleep(time.Second)
+		}
+		slog.Info("[handler]-> stopped")
+	case []byte:
+		packet := &packets.CosmosPacket{}
+		err := proto.Unmarshal(msg, packet)
+		if err != nil {
+			slog.Info("[handler]-> error unmarshalling data: %v", slog.Attr{Key: "Error", Value: slog.AnyValue(err)})
+		}
+
+		switch m := packet.Msg.(type) {
+		case *packets.CosmosPacket_AuthMessage:
+			slog.Info("[handler]-> received auth message:", "message", m)
+			c.Send(c.Parent(), m.AuthMessage)
+		default:
+			slog.Info("[handler]-> unrecognized message type in CosmosPacket:", slog.Any("type", fmt.Sprintf("%T", m)))
+		}
+
+	}
 }

@@ -4,10 +4,13 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"math/big"
 	"math/rand"
 	"net"
 	"spaghetti/internal/actors/synchronizer"
 	"spaghetti/internal/pkg/packets"
+	"spaghetti/internal/remote/policy"
+	"spaghetti/internal/utils/cache"
 	"strconv"
 	"time"
 
@@ -92,7 +95,7 @@ func (s *server) Receive(c *actor.Context) {
 		packet.SenderId = msg.pid.ID
 		data, err := packets.ToBytes(packet)
 		if err != nil {
-			slog.Error("[server]-> Failed to  send init message", err)
+			slog.Error("[server]-> Failed to  send init message", "err", err)
 		}
 		time.Sleep(time.Millisecond * 100)
 		msg.conn.Write(data)
@@ -106,6 +109,7 @@ func (s *server) Receive(c *actor.Context) {
 }
 
 func (s *server) acceptLoop(c *actor.Context) {
+	dynEval := initDynamicEvaluator()
 	for {
 		conn, err := s.ln.Accept()
 		if err != nil {
@@ -113,11 +117,25 @@ func (s *server) acceptLoop(c *actor.Context) {
 			break
 		}
 		sid := rand.Intn(math.MaxInt)
-		pid := c.SpawnChild(newSession(conn), "session", actor.WithID(strconv.Itoa(sid)))
+		pid := c.SpawnChild(newSession(conn, dynEval), "session", actor.WithID(strconv.Itoa(sid)))
 		c.Send(c.PID(), &connAdd{
 			sid:  sid,
 			pid:  pid,
 			conn: conn,
 		})
 	}
+}
+
+func initDynamicEvaluator() (dynEval *policy.DynamicEvaluator) {
+	min := big.NewInt(30000)
+	lcd := "http://127.0.0.1:1317"
+	dynClient := policy.NewCosmosBalanceClient(lcd, "token", min, 250*time.Millisecond)
+
+	dynEval = &policy.DynamicEvaluator{
+		Client:   dynClient,
+		Timeout:  250 * time.Millisecond,
+		FailOpen: false,
+		Cache:    cache.NewTTLCache[policy.Decision](time.Minute),
+	}
+	return
 }
