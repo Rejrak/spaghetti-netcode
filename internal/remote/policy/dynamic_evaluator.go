@@ -15,11 +15,11 @@ type DynamicEvaluator struct {
 }
 
 func (e *DynamicEvaluator) Evaluate(ctx context.Context, pc *Context) (Decision, error) {
-	if e.Cache != nil {
-		if d, ok := e.Cache.Get(cacheKey(pc)); ok {
-			return d, nil
-		}
-	}
+	// if e.Cache != nil {
+	// 	if d, ok := e.Cache.Get(cacheKey(pc)); ok {
+	// 		return d, nil
+	// 	}
+	// }
 	tctx, cancel := context.WithTimeout(ctx, e.Timeout)
 	defer cancel()
 

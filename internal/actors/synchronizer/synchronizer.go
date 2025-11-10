@@ -9,8 +9,6 @@ import (
 	"spaghetti/internal/user"
 	"time"
 
-	"log"
-
 	"github.com/anthdm/hollywood/actor"
 	"golang.org/x/exp/slog"
 )
@@ -188,7 +186,7 @@ func (s *Syncronizer) syncOne(c *actor.Context, address string) {
 	if s.remote != nil {
 		rctx, rcancel := context.WithTimeout(context.Background(), s.cfg.RemoteTimeout)
 		attrs, err = s.remote.FetchAttributes(rctx, address)
-		log.Default().Printf("Fetched remote attrs for %s: %v (err=%v)", address, s.fmtAttrs(attrs), err)
+		// log.Default().Printf("Fetched remote attrs for %s: %v (err=%v)", address, s.fmtAttrs(attrs), err)
 		rcancel()
 	}
 
@@ -200,7 +198,7 @@ func (s *Syncronizer) syncOne(c *actor.Context, address string) {
 			s.dbg("updated attrs+roles+perms from remote for %s", address)
 		}
 	default:
-		_, updatedAt, ok, gerr := s.repo.GetAttrsExtended(context.Background(), address)
+		_, _, ok, gerr := s.repo.GetAttrsExtended(context.Background(), address)
 		if gerr != nil {
 			s.dbg("GetAttrs(%s) error: %v", address, gerr)
 			return
@@ -209,7 +207,7 @@ func (s *Syncronizer) syncOne(c *actor.Context, address string) {
 			s.dbg("no local attrs for %s and remote unavailable", address)
 			return
 		}
-		s.dbg("kept local attrs for %s (remote err: %v, last=%s)", address, err, time.Unix(updatedAt, 0).UTC())
+		// s.dbg("kept local attrs for %s (remote err: %v, last=%s)", address, err, time.Unix(updatedAt, 0).UTC())
 	}
 }
 

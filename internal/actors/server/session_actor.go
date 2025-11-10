@@ -95,8 +95,12 @@ func (s *session) checkOperationAndPermissions(op string, attrs *user.Attributes
 		Session:   "", // se ce l’hai
 		Address:   msg.Address,
 		Operation: op,
-		Resources: map[string]string{},
+		Resources: map[string]string{
+			"count":      "200",
+			"complexity": "100",
+		},
 	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 
