@@ -8,7 +8,6 @@ import (
 	"math/rand"
 	"net"
 	"spaghetti/internal/actors/synchronizer"
-	"spaghetti/internal/pkg/packets"
 	"spaghetti/internal/remote/policy"
 	"spaghetti/internal/utils/cache"
 	"strconv"
@@ -91,14 +90,14 @@ func (s *server) Receive(c *actor.Context) {
 	case *connAdd:
 		slog.Info("[server]-> added new connection to my map", "addr", msg.conn.RemoteAddr(), "pid", msg.pid)
 		s.sessions[msg.pid] = msg.conn
-		var packet = &packets.Packet{}
-		packet.SenderId = msg.pid.ID
-		data, err := packets.ToBytes(packet)
-		if err != nil {
-			slog.Error("[server]-> Failed to  send init message", "err", err)
-		}
-		time.Sleep(time.Millisecond * 100)
-		msg.conn.Write(data)
+		// var packet = &packets.Packet{}
+		// packet.SenderId = msg.pid.ID
+		// data, err := packets.ToBytes(packet)
+		// if err != nil {
+		// 	slog.Error("[server]-> Failed to  send init message", "err", err)
+		// }
+		// time.Sleep(time.Millisecond * 100)
+		// msg.conn.Write(data)
 
 	case *connRem:
 		slog.Debug("[server]-> removed connection from my map", "pid", msg.pid)

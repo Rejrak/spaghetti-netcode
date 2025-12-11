@@ -52,7 +52,6 @@ func (s *session) readUserAttributes(c context.Context, address string) (*user.A
 }
 
 func (s *session) Receive(c *actor.Context) {
-
 	switch msg := c.Message().(type) {
 	case actor.Started:
 		c.SpawnChild(newHandler, "handler", actor.WithID("session"))
@@ -62,12 +61,21 @@ func (s *session) Receive(c *actor.Context) {
 		s.conn.Close()
 	case *packets.CosmosPacket:
 		slog.Info("[session]-> Handler: Received Cosmos packet:", "packet", msg)
-	case *packets.AuthMessage:
-		userAttrs, _ := s.readUserAttributes(c.Context(), msg.Address)
-		response := s.checkOperationAndPermissions(msg.Operation, userAttrs, msg)
+		reqID := msg.GetRequestId()
+		auth := msg.GetAuthMessage()
+		if auth == nil {
+			slog.Error("[session]-> received CosmosPacket without AuthMessage")
+			return
+		}
+		if reqID == "" {
+			slog.Error("[session]-> missing request ID in the received packet")
+			return
+		}
+		userAttrs, _ := s.readUserAttributes(c.Context(), auth.Address)
+		response := s.checkOperationAndPermissions(auth.Operation, userAttrs, auth)
 		resp := &packets.CosmosPacket{
-			SenderId: msg.Address,
-			Msg:      response,
+			RequestId: reqID,
+			Msg:       response,
 		}
 		data, err := packets.CosmosPacketToBytes(resp)
 		if err != nil {
@@ -79,6 +87,10 @@ func (s *session) Receive(c *actor.Context) {
 		}
 		slog.Info("[session]-> Response Sended", "err", err)
 
+	case *packets.AuthMessage:
+		slog.Info("[session]-> Handler: Received AuthMessage:", "message", msg)
+	default:
+		slog.Warn("[session]-> unknown message", "msg", msg)
 	}
 }
 
@@ -91,24 +103,25 @@ func (s *session) checkOperationAndPermissions(op string, attrs *user.Attributes
 	// }
 
 	// 2) dynamic (balance >= 500 token)
-	pc := &policy.Context{
-		Session:   "", // se ce l’hai
-		Address:   msg.Address,
-		Operation: op,
-		Resources: map[string]string{
-			"count":      "200",
-			"complexity": "100",
-		},
-	}
+	// pc := &policy.Context{
+	// 	Session:   "", // se ce l’hai
+	// 	Address:   msg.Address,
+	// 	Operation: op,
+	// 	Resources: map[string]string{
+	// 		"count":      "100",
+	// 		"complexity": "1",
+	// 	},
+	// }
 
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
-	defer cancel()
+	// ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	// defer cancel()
 
-	dec, _ := s.dynEval.Evaluate(ctx, pc)
+	// dec, _ := s.dynEval.Evaluate(ctx, pc)
 	return &packets.CosmosPacket_ResponseMessage{
 		ResponseMessage: &packets.ResponseMessage{
-			Success: dec.Allow,
-			Message: dec.Message,
+			// Success: dec.Allow,
+			Success: true,
+			Message: "",
 		},
 	}
 }
@@ -173,11 +186,10 @@ func (handler) Receive(c *actor.Context) {
 		if err != nil {
 			slog.Info("[handler]-> error unmarshalling data: %v", slog.Attr{Key: "Error", Value: slog.AnyValue(err)})
 		}
-
 		switch m := packet.Msg.(type) {
 		case *packets.CosmosPacket_AuthMessage:
 			slog.Info("[handler]-> received auth message:", "message", m)
-			c.Send(c.Parent(), m.AuthMessage)
+			c.Send(c.Parent(), packet)
 		default:
 			slog.Info("[handler]-> unrecognized message type in CosmosPacket:", slog.Any("type", fmt.Sprintf("%T", m)))
 		}

@@ -20,7 +20,6 @@ type AttributesClient struct {
 	Client           *http.Client
 }
 
-// NewAttributesClient creates a client with sane defaults.
 func NewAttributesClient(baseURL string, minCount int, maxTotalEval time.Duration, timeout time.Duration) *AttributesClient {
 	return &AttributesClient{
 		BaseURL:          baseURL,
@@ -30,8 +29,6 @@ func NewAttributesClient(baseURL string, minCount int, maxTotalEval time.Duratio
 		Client:           &http.Client{Timeout: timeout},
 	}
 }
-
-// ---- Wire types (matching FastAPI response) ---------------------------------
 
 type attrItem struct {
 	ID              int     `json:"id"`
@@ -109,7 +106,7 @@ func (c *AttributesClient) Evaluate(ctx context.Context, in *Context) (Decision,
 	for _, attr := range out.Attributes {
 		okLatency = okLatency && attr.EvalTimeMs < 10
 		if !okLatency {
-			slog.Info("Eval Attributes", slog.Float64("EvalTimeMs", attr.EvalTimeMs), slog.Bool("Evaluation", attr.EvalTimeMs < 0.001))
+			slog.Info("Eval Attributes", slog.Float64("EvalTimeMs", attr.EvalTimeMs), slog.Bool("Evaluation", attr.EvalTimeMs < 10))
 			break
 		}
 	}
