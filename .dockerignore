@@ -1,0 +1,9 @@
+.git
+.gitignore
+.vscode
+*.db
+*.log
+bin
+attempts
+tmp
+*.out
