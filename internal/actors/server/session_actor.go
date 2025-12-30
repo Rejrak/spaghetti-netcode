@@ -15,11 +15,26 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+const (
+	maxFrameSize  = 1 << 20 // 1 MiB (adatta a te)
+	readDeadline  = 2 * time.Second
+	writeDeadline = 5 * time.Second
+)
+
+type stopSession struct {
+	err error
+}
+
 // Parents -> Server
 type session struct {
-	conn    net.Conn
-	repo    *sqlite.Repo
-	dynEval *policy.DynamicEvaluator
+	conn       net.Conn
+	repo       *sqlite.Repo
+	dynEval    *policy.DynamicEvaluator
+	handlerPID *actor.PID
+
+	// lifecycle
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 func newSession(conn net.Conn, dyn *policy.DynamicEvaluator, repo *sqlite.Repo) actor.Producer {
@@ -34,15 +49,43 @@ func newSession(conn net.Conn, dyn *policy.DynamicEvaluator, repo *sqlite.Repo) 
 
 func (s *session) Receive(c *actor.Context) {
 	switch msg := c.Message().(type) {
+
 	case actor.Started:
-		c.SpawnChild(newHandler, "handler", actor.WithID("session"))
+		s.ctx, s.cancel = context.WithCancel(context.Background())
+
+		// evita WithID("handler") fisso (se Hollywood richiede univocità nel sottoalbero)
+		s.handlerPID = c.SpawnChild(newHandler, "handler")
+
 		slog.Info("[session]-> new connection", "addr", s.conn.RemoteAddr())
+
 		go s.readLoop(c)
+
+	case *stopSession:
+		// chiudi in modo deterministico
+		if msg.err != nil {
+			slog.Info("[session]-> stopping due to read error", "err", msg.err)
+		}
+		// notifica server rimozione + chiusura conn
+		c.Send(c.Parent(), &connRem{pid: c.PID()})
+
+		// stop actor dal thread actor
+		c.Engine().Poison(c.PID())
+
 	case actor.Stopped:
-		s.repo.Close()
-		s.conn.Close()
+		// stop goroutines
+		if s.cancel != nil {
+			s.cancel()
+		}
+		// chiusura conn sblocca eventuali Read/Write
+		if s.conn != nil {
+			_ = s.conn.Close()
+		}
+		// NON chiudere repo qui: è condiviso dal server
+		// _ = s.repo.Close()
+
 	case *packets.CosmosPacket:
 		slog.Info("[session]-> Handler: Received Cosmos packet:", "packet", msg)
+
 		reqID := msg.GetRequestId()
 		auth := msg.GetAuthMessage()
 		if auth == nil {
@@ -53,8 +96,10 @@ func (s *session) Receive(c *actor.Context) {
 			slog.Error("[session]-> missing request ID in the received packet")
 			return
 		}
+
 		userAttrs, _ := s.readUserAttributes(c.Context(), auth.Address)
 		response := s.checkOperationAndPermissions(auth.Operation, userAttrs, auth)
+
 		resp := &packets.CosmosPacket{
 			RequestId: reqID,
 			Msg:       response,
@@ -64,21 +109,24 @@ func (s *session) Receive(c *actor.Context) {
 			slog.Error("[session]-> failed to serialize response", "err", err)
 			return
 		}
+
+		_ = s.conn.SetWriteDeadline(time.Now().Add(writeDeadline))
 		if _, err := s.conn.Write(data); err != nil {
 			slog.Error("[session]-> write failed", "err", err)
+			// in caso di errore di scrittura, fermiamo la sessione
+			c.Send(c.PID(), &stopSession{err: err})
+			return
 		}
-		slog.Info("[session]-> Response Sended", "err", err)
 
 	case *packets.AuthMessage:
 		slog.Info("[session]-> Handler: Received AuthMessage:", "message", msg)
+
 	default:
 		slog.Warn("[session]-> unknown message", "msg", msg)
 	}
 }
 
 func (s *session) readUserAttributes(c context.Context, address string) (*user.Attributes, error) {
-	defer s.repo.Close()
-
 	userAttrs, updated, ok, err := s.repo.GetAttrsExtended(c, address)
 	if err != nil {
 		slog.Error("[session]-> Failed to get user attributes", "err", err)
@@ -93,73 +141,96 @@ func (s *session) readUserAttributes(c context.Context, address string) (*user.A
 }
 
 func (s *session) checkOperationAndPermissions(op string, attrs *user.Attributes, msg *packets.AuthMessage) *packets.CosmosPacket_ResponseMessage {
-	// 1) static decision
-	// if deny, why := staticDeny(op, attrs); deny {
-	// 	return &packets.CosmosPacket_ResponseMessage{
-	// 		ResponseMessage: &packets.ResponseMessage{Success: false, Message: why},
-	// 	}
-	// }
-
-	// 2) dynamic (balance >= 500 token)
-	// pc := &policy.Context{
-	// 	Session:   "", // se ce l’hai
-	// 	Address:   msg.Address,
-	// 	Operation: op,
-	// 	Resources: map[string]string{
-	// 		"count":      "100",
-	// 		"complexity": "1",
-	// 	},
-	// }
-
-	// ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
-	// defer cancel()
-
-	// dec, _ := s.dynEval.Evaluate(ctx, pc)
 	return &packets.CosmosPacket_ResponseMessage{
 		ResponseMessage: &packets.ResponseMessage{
-			// Success: dec.Allow,
 			Success: true,
 			Message: "",
 		},
 	}
 }
 
-func staticDeny(op string, attrs *user.Attributes) (bool, string) {
-	switch op {
-	case "/cosmos.bank.v1beta1.MsgSend":
-		if attrs.Perms["supply.harvest.create"] {
-			return true, "denied by static policy"
-		}
-	}
-	return false, ""
-}
-
 func (s *session) readLoop(c *actor.Context) {
-	buf := make([]byte, 1024)
-	var dataBuffer []byte
-	var handlerPID = fmt.Sprintf("%s/handler/session", c.PID().ID)
+	defer func() {
+		// qualsiasi uscita → chiedi stop sessione
+		// (se l’actor è già morto, il Send verrà ignorato)
+	}()
+
+	buf := make([]byte, 4096)
+	dataBuffer := make([]byte, 0, 8192)
+
 	for {
+		// permettiamo di interrompere un Read bloccante
+		_ = s.conn.SetReadDeadline(time.Now().Add(readDeadline))
+
 		n, err := s.conn.Read(buf)
 		if err != nil {
-			slog.Error("[session]-> conn read error", "err", err)
-			break
+			// se è un timeout, controlla se dobbiamo fermarci
+			if ne, ok := err.(net.Error); ok && ne.Timeout() {
+				select {
+				case <-s.ctx.Done():
+					c.Send(c.PID(), &stopSession{err: context.Canceled})
+					return
+				default:
+					continue
+				}
+			}
+
+			// errore reale/EOF → stop
+			c.Send(c.PID(), &stopSession{err: err})
+			return
 		}
+
+		// append con guardia per evitare crescita infinita
 		dataBuffer = append(dataBuffer, buf[:n]...)
+		if len(dataBuffer) > maxFrameSize+4 {
+			c.Send(c.PID(), &stopSession{err: fmt.Errorf("buffer exceeds limit: %d", len(dataBuffer))})
+			return
+		}
+
 		for {
 			if len(dataBuffer) < 4 {
 				break
 			}
-			msgLen := int(dataBuffer[0])<<24 | int(dataBuffer[1])<<16 | int(dataBuffer[2])<<8 | int(dataBuffer[3])
+
+			msgLen := int(dataBuffer[0])<<24 |
+				int(dataBuffer[1])<<16 |
+				int(dataBuffer[2])<<8 |
+				int(dataBuffer[3])
+
+			if msgLen <= 0 || msgLen > maxFrameSize {
+				c.Send(c.PID(), &stopSession{err: fmt.Errorf("invalid frame size: %d", msgLen)})
+				return
+			}
+
 			if len(dataBuffer) < 4+msgLen {
 				break
 			}
+
 			packetBytes := dataBuffer[4 : 4+msgLen]
-			c.Send(c.Child(handlerPID), packetBytes)
+
+			// copia per isolare il payload (evita retention di dataBuffer)
+			tmp := make([]byte, len(packetBytes))
+			copy(tmp, packetBytes)
+
+			c.Send(s.handlerPID, tmp)
+
+			// consume
 			dataBuffer = dataBuffer[4+msgLen:]
+
+			// se buffer si è svuotato, rilascia memoria tenuta da slice grande
+			if len(dataBuffer) == 0 {
+				dataBuffer = make([]byte, 0, 8192)
+				break
+			}
+		}
+
+		select {
+		case <-s.ctx.Done():
+			c.Send(c.PID(), &stopSession{err: context.Canceled})
+			return
+		default:
 		}
 	}
-	c.Send(c.Parent(), &connRem{pid: c.PID()})
-	c.Engine().Poison(c.PID())
 }
 
 // Parents -> Server -> Session
@@ -172,26 +243,23 @@ func newHandler() actor.Receiver {
 func (handler) Receive(c *actor.Context) {
 	switch msg := c.Message().(type) {
 	case actor.Started:
-		slog.Info("[handler]-> started with PID: %v", "pid", c.PID())
+		slog.Info("[handler]-> started", "pid", c.PID())
 	case actor.Stopped:
-		for i := 0; i < 1; i++ {
-			slog.Info("\r[handler]-> stopping in %d", "i", 1-i)
-			time.Sleep(time.Second)
-		}
-		slog.Info("[handler]-> stopped")
+		// evita sleep: ritarda stop e può trattenere risorse
+		slog.Info("[handler]-> stopped", "pid", c.PID())
 	case []byte:
 		packet := &packets.CosmosPacket{}
-		err := proto.Unmarshal(msg, packet)
-		if err != nil {
-			slog.Info("[handler]-> error unmarshalling data: %v", slog.Attr{Key: "Error", Value: slog.AnyValue(err)})
-		}
-		switch m := packet.Msg.(type) {
-		case *packets.CosmosPacket_AuthMessage:
-			slog.Info("[handler]-> received auth message:", "message", m)
-			c.Send(c.Parent(), packet)
-		default:
-			slog.Info("[handler]-> unrecognized message type in CosmosPacket:", slog.Any("type", fmt.Sprintf("%T", m)))
+		if err := proto.Unmarshal(msg, packet); err != nil {
+			slog.Info("[handler]-> error unmarshalling data", "err", err)
+			return
 		}
 
+		switch m := packet.Msg.(type) {
+		case *packets.CosmosPacket_AuthMessage:
+			slog.Info("[handler]-> received auth message", "message", m)
+			c.Send(c.Parent(), packet)
+		default:
+			slog.Info("[handler]-> unrecognized message type", "type", fmt.Sprintf("%T", m))
+		}
 	}
 }

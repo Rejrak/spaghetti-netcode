@@ -24,6 +24,14 @@ type Syncronizer struct {
 	repeater actor.SendRepeater
 }
 
+func NewSyncronizer(cfg Config, repo *sqlite.Repo) actor.Receiver {
+	return &Syncronizer{
+		cfg:    cfg,
+		stopCh: make(chan struct{}),
+		repo:   repo,
+	}
+}
+
 func (s *Syncronizer) Receive(c *actor.Context) {
 	switch msg := c.Message().(type) {
 	case actor.Started:
@@ -38,18 +46,12 @@ func (s *Syncronizer) Receive(c *actor.Context) {
 
 	case ForceSync:
 		s.runSyncOnce(c)
+
 	case Tick:
 		s.runSyncOnce(c)
 
 	default:
 		s.dbg("Message Received: %v", msg)
-	}
-}
-
-func NewSyncronizer(cfg Config) actor.Receiver {
-	return &Syncronizer{
-		cfg:    cfg,
-		stopCh: make(chan struct{}),
 	}
 }
 
@@ -59,14 +61,6 @@ func (s *Syncronizer) dbg(format string, args ...any) {
 
 func (s *Syncronizer) onStart(c *actor.Context) {
 	s.dbg("started with PID=%v", c.PID())
-
-	repo, err := sqlite.Open(s.cfg.DBPath)
-	if err != nil {
-		s.dbg("sqlite open error: %v", err)
-		// puoi decidere di fermare l’attore con un panic (supervisor lo rimonterà)
-		panic(err)
-	}
-	s.repo = repo
 
 	if s.cfg.KeycloakBaseURL != "" && s.cfg.KeycloakRealm != "" && s.cfg.KeycloakClientID != "" {
 		s.dbg("using Keycloak remote backend (%s / %s)", s.cfg.KeycloakBaseURL, s.cfg.KeycloakRealm)
@@ -83,29 +77,46 @@ func (s *Syncronizer) onStart(c *actor.Context) {
 		s.dbg("no remote backend configured")
 	}
 
-	// ticker -> manda Tick a se stesso
 	interval := s.cfg.PollInterval
 	if interval <= 0 {
 		interval = 30 * time.Second
 	}
+
+	// IMPORTANT: SendRepeat va stoppato in onStop(), altrimenti resta attivo.
 	s.repeater = c.SendRepeat(c.PID(), Tick{}, interval)
 }
 
 func (s *Syncronizer) onStop(c *actor.Context) {
-	for i := 0; i < 1; i++ {
-		s.dbg("%v stopping in %d", c.PID(), 1-i)
-		time.Sleep(time.Second)
+	// Stop del repeater (evita schedulazioni/timer che restano in vita).
+	// Se SendRepeater è zero-value e Stop() è safe, bene; altrimenti questo if evita panics.
+	// (Hollywood di solito rende Stop safe, ma meglio difensivi.)
+	if (s.repeater != actor.SendRepeater{}) {
+		s.repeater.Stop()
 	}
-	close(s.stopCh)
+
+	select {
+	case <-s.stopCh:
+		// già chiuso
+	default:
+		close(s.stopCh)
+	}
+
 	if s.repo != nil {
 		_ = s.repo.Close()
 	}
+
 	s.dbg("stopped")
 }
 
 func (s *Syncronizer) onRegisterAddress(c *actor.Context, m RegisterAddress) {
+	if s.repo == nil {
+		s.dbg("repo is nil, cannot register address")
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
+
 	if err := s.repo.EnsureAddress(ctx, m.Address, m.Session); err != nil {
 		s.dbg("EnsureAddress(%s) error: %v", m.Address, err)
 		return
@@ -114,52 +125,85 @@ func (s *Syncronizer) onRegisterAddress(c *actor.Context, m RegisterAddress) {
 }
 
 func (s *Syncronizer) runSyncOnce(c *actor.Context) {
+	if s.repo == nil {
+		s.dbg("repo is nil, cannot sync")
+		return
+	}
+
+	// Se il remote supporta "fetch all", facciamo una full sync batch.
 	type allUsersCap interface {
 		FetchAllUsers(ctx context.Context) ([]*user.User, error)
 	}
+
 	if au, ok := s.remote.(allUsersCap); ok {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		all, err := au.FetchAllUsers(ctx)
 		cancel()
+
 		if err != nil {
 			s.dbg("FetchAllUsers error: %v", err)
 		} else if len(all) > 0 {
+			// Qui nel tuo codice batchCRUD veniva allocata ma MAI popolata.
+			// O la togliamo o la riempiamo: la riempio per coerenza.
 			batchCRUD := make(map[string]*user.Attributes, len(all))
-
 			batchRP := make([]sqlite.RolesPermsRow, 0, len(all))
 
 			for _, u := range all {
 				if u == nil || u.Attrs == nil || u.Address == "" {
 					continue
 				}
+
+				// Copia difensiva
+				attrsCopy := &user.Attributes{
+					CanCreate: u.Attrs.CanCreate,
+					CanRead:   u.Attrs.CanRead,
+					CanUpdate: u.Attrs.CanUpdate,
+					CanDelete: u.Attrs.CanDelete,
+					Roles:     append([]string(nil), u.Attrs.Roles...),
+					Perms:     cloneBoolMap(u.Attrs.Perms),
+				}
+
+				batchCRUD[u.Address] = attrsCopy
+
 				batchRP = append(batchRP, sqlite.RolesPermsRow{
 					Address: u.Address,
-					Roles:   append([]string(nil), u.Attrs.Roles...),
-					Perms:   u.Attrs.Perms,
+					Roles:   append([]string(nil), attrsCopy.Roles...),
+					Perms:   attrsCopy.Perms,
 				})
-				s.syncOne(c, u.Address)
+
+				// Se fai già batch upsert, syncOne per ogni utente può essere ridondante.
+				// Lo lascio solo se in syncOne fai logica extra. Altrimenti puoi rimuoverlo.
+				// s.syncOne(c, u.Address)
 			}
 
-			if err := s.repo.UpsertAttrsBatch(context.Background(), batchCRUD); err != nil {
-				s.dbg("UpsertAttrsBatch error: %v", err)
+			if len(batchCRUD) > 0 {
+				if err := s.repo.UpsertAttrsBatch(context.Background(), batchCRUD); err != nil {
+					s.dbg("UpsertAttrsBatch error: %v", err)
+				}
 			}
-			if err := s.repo.ReplaceManyUsersRolesPerms(context.Background(), batchRP); err != nil {
-				s.dbg("ReplaceManyUsersRolesPerms error: %v", err)
-			} else {
-				s.dbg("full sync from remote (batch): n=%d", len(batchRP))
+
+			if len(batchRP) > 0 {
+				if err := s.repo.ReplaceManyUsersRolesPerms(context.Background(), batchRP); err != nil {
+					s.dbg("ReplaceManyUsersRolesPerms error: %v", err)
+				} else {
+					s.dbg("full sync from remote (batch): n=%d", len(batchRP))
+				}
 			}
 		}
 	}
 
-	stale := time.Now().Add(-s.cfg.StaleAfter)
-	if s.cfg.StaleAfter <= 0 {
-		stale = time.Now().Add(-30 * time.Minute)
-		// stale = time.Now().Add(-10 * time.Second)
+	// Sync "stale addresses" dal DB locale
+	staleAfter := s.cfg.StaleAfter
+	if staleAfter <= 0 {
+		staleAfter = 30 * time.Minute
 	}
+	stale := time.Now().Add(-staleAfter)
+
 	limit := s.cfg.MaxBatch
 	if limit <= 0 {
 		limit = 100
 	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
@@ -180,13 +224,23 @@ func (s *Syncronizer) runSyncOnce(c *actor.Context) {
 }
 
 func (s *Syncronizer) syncOne(c *actor.Context, address string) {
-	var attrs *user.Attributes
-	var err error
+	if s.repo == nil {
+		return
+	}
+
+	var (
+		attrs *user.Attributes
+		err   error
+	)
 
 	if s.remote != nil {
-		rctx, rcancel := context.WithTimeout(context.Background(), s.cfg.RemoteTimeout)
+		timeout := s.cfg.RemoteTimeout
+		if timeout <= 0 {
+			timeout = 3 * time.Second
+		}
+
+		rctx, rcancel := context.WithTimeout(context.Background(), timeout)
 		attrs, err = s.remote.FetchAttributes(rctx, address)
-		// log.Default().Printf("Fetched remote attrs for %s: %v (err=%v)", address, s.fmtAttrs(attrs), err)
 		rcancel()
 	}
 
@@ -207,7 +261,6 @@ func (s *Syncronizer) syncOne(c *actor.Context, address string) {
 			s.dbg("no local attrs for %s and remote unavailable", address)
 			return
 		}
-		// s.dbg("kept local attrs for %s (remote err: %v, last=%s)", address, err, time.Unix(updatedAt, 0).UTC())
 	}
 }
 
@@ -216,4 +269,15 @@ func (s *Syncronizer) fmtAttrs(a *user.Attributes) string {
 		return "<nil>"
 	}
 	return fmt.Sprintf("C=%v R=%v U=%v D=%v", a.CanCreate, a.CanRead, a.CanUpdate, a.CanDelete)
+}
+
+func cloneBoolMap(m map[string]bool) map[string]bool {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string]bool, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
 }
