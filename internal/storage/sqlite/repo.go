@@ -16,7 +16,8 @@ type Repo struct {
 }
 
 func Open(path string) (*Repo, error) {
-	dsn := path + "?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)"
+	dsn := path + "?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=wal_autocheckpoint(1000)&_pragma=cache_size(-20000)"
+
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err

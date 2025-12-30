@@ -82,21 +82,16 @@ func (s *Syncronizer) onStart(c *actor.Context) {
 		interval = 30 * time.Second
 	}
 
-	// IMPORTANT: SendRepeat va stoppato in onStop(), altrimenti resta attivo.
 	s.repeater = c.SendRepeat(c.PID(), Tick{}, interval)
 }
 
 func (s *Syncronizer) onStop(c *actor.Context) {
-	// Stop del repeater (evita schedulazioni/timer che restano in vita).
-	// Se SendRepeater è zero-value e Stop() è safe, bene; altrimenti questo if evita panics.
-	// (Hollywood di solito rende Stop safe, ma meglio difensivi.)
 	if (s.repeater != actor.SendRepeater{}) {
 		s.repeater.Stop()
 	}
 
 	select {
 	case <-s.stopCh:
-		// già chiuso
 	default:
 		close(s.stopCh)
 	}
@@ -130,7 +125,6 @@ func (s *Syncronizer) runSyncOnce(c *actor.Context) {
 		return
 	}
 
-	// Se il remote supporta "fetch all", facciamo una full sync batch.
 	type allUsersCap interface {
 		FetchAllUsers(ctx context.Context) ([]*user.User, error)
 	}
@@ -143,8 +137,6 @@ func (s *Syncronizer) runSyncOnce(c *actor.Context) {
 		if err != nil {
 			s.dbg("FetchAllUsers error: %v", err)
 		} else if len(all) > 0 {
-			// Qui nel tuo codice batchCRUD veniva allocata ma MAI popolata.
-			// O la togliamo o la riempiamo: la riempio per coerenza.
 			batchCRUD := make(map[string]*user.Attributes, len(all))
 			batchRP := make([]sqlite.RolesPermsRow, 0, len(all))
 
@@ -153,7 +145,6 @@ func (s *Syncronizer) runSyncOnce(c *actor.Context) {
 					continue
 				}
 
-				// Copia difensiva
 				attrsCopy := &user.Attributes{
 					CanCreate: u.Attrs.CanCreate,
 					CanRead:   u.Attrs.CanRead,
@@ -171,9 +162,7 @@ func (s *Syncronizer) runSyncOnce(c *actor.Context) {
 					Perms:   attrsCopy.Perms,
 				})
 
-				// Se fai già batch upsert, syncOne per ogni utente può essere ridondante.
-				// Lo lascio solo se in syncOne fai logica extra. Altrimenti puoi rimuoverlo.
-				// s.syncOne(c, u.Address)
+				s.syncOne(c, u.Address)
 			}
 
 			if len(batchCRUD) > 0 {
@@ -192,7 +181,6 @@ func (s *Syncronizer) runSyncOnce(c *actor.Context) {
 		}
 	}
 
-	// Sync "stale addresses" dal DB locale
 	staleAfter := s.cfg.StaleAfter
 	if staleAfter <= 0 {
 		staleAfter = 30 * time.Minute

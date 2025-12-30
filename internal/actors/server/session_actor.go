@@ -9,6 +9,7 @@ import (
 	"spaghetti/internal/remote/policy"
 	"spaghetti/internal/storage/sqlite"
 	"spaghetti/internal/user"
+	"sync"
 	"time"
 
 	"github.com/anthdm/hollywood/actor"
@@ -26,6 +27,13 @@ type stopSession struct {
 	err error
 }
 
+var framePool = sync.Pool{
+	New: func() any {
+		b := make([]byte, 0, 4096)
+		return &b
+	},
+}
+
 // Parents -> Server
 type session struct {
 	conn       net.Conn
@@ -36,6 +44,8 @@ type session struct {
 	// lifecycle
 	ctx    context.Context
 	cancel context.CancelFunc
+
+	closeOnce sync.Once
 }
 
 func newSession(conn net.Conn, dyn *policy.DynamicEvaluator, repo *sqlite.Repo) actor.Producer {
@@ -53,17 +63,26 @@ func (s *session) Receive(c *actor.Context) {
 
 	case actor.Started:
 		s.ctx, s.cancel = context.WithCancel(context.Background())
-
 		s.handlerPID = c.SpawnChild(newHandler, "handler")
 
 		slog.Info("[session]-> new connection", "addr", s.conn.RemoteAddr())
 
-		go s.readLoop(c)
+		engine := c.Engine()
+		selfPID := c.PID()
+		handlerPID := s.handlerPID
+
+		go s.readLoop(engine, selfPID, handlerPID)
 
 	case *stopSession:
 		if msg.err != nil {
-			slog.Info("[session]-> stopping due to read error", "err", msg.err)
+			slog.Info("[session]-> stopping due to error", "err", msg.err)
 		}
+
+		s.closeConn()
+		if s.cancel != nil {
+			s.cancel()
+		}
+
 		c.Send(c.Parent(), &connRem{pid: c.PID()})
 		c.Engine().Poison(c.PID())
 
@@ -71,12 +90,10 @@ func (s *session) Receive(c *actor.Context) {
 		if s.cancel != nil {
 			s.cancel()
 		}
-		if s.conn != nil {
-			_ = s.conn.Close()
-		}
+		s.closeConn()
 
 	case *packets.CosmosPacket:
-		slog.Info("[session]-> Handler: Received Cosmos packet:", "packet", msg)
+		slog.Info("[session]-> Handler: Received Cosmos packet", "packet", msg)
 
 		reqID := msg.GetRequestId()
 		auth := msg.GetAuthMessage()
@@ -110,11 +127,19 @@ func (s *session) Receive(c *actor.Context) {
 		}
 
 	case *packets.AuthMessage:
-		slog.Info("[session]-> Handler: Received AuthMessage:", "message", msg)
+		slog.Info("[session]-> Handler: Received AuthMessage", "message", msg)
 
 	default:
 		slog.Warn("[session]-> unknown message", "msg", msg)
 	}
+}
+
+func (s *session) closeConn() {
+	s.closeOnce.Do(func() {
+		if s.conn != nil {
+			_ = s.conn.Close()
+		}
+	})
 }
 
 func (s *session) readUserAttributes(c context.Context, address string) (*user.Attributes, error) {
@@ -125,7 +150,7 @@ func (s *session) readUserAttributes(c context.Context, address string) (*user.A
 	}
 	slog.Info("[session]-> Address Attrs", "attrs", userAttrs, "updated", updated, "ok", ok, "err", err)
 	if !ok {
-		s.repo.EnsureAddress(c, address, "")
+		_ = s.repo.EnsureAddress(c, address, "")
 		return nil, fmt.Errorf("attributes not found")
 	}
 	return userAttrs, nil
@@ -140,41 +165,40 @@ func (s *session) checkOperationAndPermissions(op string, attrs *user.Attributes
 	}
 }
 
-func (s *session) readLoop(c *actor.Context) {
-	defer func() {
-	}()
-
+func (s *session) readLoop(engine *actor.Engine, selfPID, handlerPID *actor.PID) {
 	buf := make([]byte, 4096)
 	dataBuffer := make([]byte, 0, 8192)
 	lastActivity := time.Now()
 
 	for {
+		select {
+		case <-s.ctx.Done():
+			engine.Send(selfPID, &stopSession{err: context.Canceled})
+			return
+		default:
+		}
+
 		_ = s.conn.SetReadDeadline(time.Now().Add(readDeadline))
 
 		n, err := s.conn.Read(buf)
 		if err != nil {
+			// Se la conn è stata chiusa da noi, spesso err != Timeout; va bene: stop.
 			if ne, ok := err.(net.Error); ok && ne.Timeout() {
 				if time.Since(lastActivity) >= idleTimeout {
-					c.Send(c.PID(), &stopSession{err: fmt.Errorf("idle timeout after %s", idleTimeout)})
+					engine.Send(selfPID, &stopSession{err: fmt.Errorf("idle timeout after %s", idleTimeout)})
 					return
 				}
-				select {
-				case <-s.ctx.Done():
-					c.Send(c.PID(), &stopSession{err: context.Canceled})
-					return
-				default:
-					continue
-				}
+				continue
 			}
 
-			c.Send(c.PID(), &stopSession{err: err})
+			engine.Send(selfPID, &stopSession{err: err})
 			return
 		}
 		lastActivity = time.Now()
 
 		dataBuffer = append(dataBuffer, buf[:n]...)
 		if len(dataBuffer) > maxFrameSize+4 {
-			c.Send(c.PID(), &stopSession{err: fmt.Errorf("buffer exceeds limit: %d", len(dataBuffer))})
+			engine.Send(selfPID, &stopSession{err: fmt.Errorf("buffer exceeds limit: %d", len(dataBuffer))})
 			return
 		}
 
@@ -189,7 +213,7 @@ func (s *session) readLoop(c *actor.Context) {
 				int(dataBuffer[3])
 
 			if msgLen <= 0 || msgLen > maxFrameSize {
-				c.Send(c.PID(), &stopSession{err: fmt.Errorf("invalid frame size: %d", msgLen)})
+				engine.Send(selfPID, &stopSession{err: fmt.Errorf("invalid frame size: %d", msgLen)})
 				return
 			}
 
@@ -199,10 +223,16 @@ func (s *session) readLoop(c *actor.Context) {
 
 			packetBytes := dataBuffer[4 : 4+msgLen]
 
-			tmp := make([]byte, len(packetBytes))
-			copy(tmp, packetBytes)
+			pb := framePool.Get().(*[]byte)
+			b := *pb
+			if cap(b) < len(packetBytes) {
+				b = make([]byte, len(packetBytes))
+			} else {
+				b = b[:len(packetBytes)]
+			}
+			copy(b, packetBytes)
 
-			c.Send(s.handlerPID, tmp)
+			engine.Send(handlerPID, b)
 
 			dataBuffer = dataBuffer[4+msgLen:]
 
@@ -211,22 +241,13 @@ func (s *session) readLoop(c *actor.Context) {
 				break
 			}
 		}
-
-		select {
-		case <-s.ctx.Done():
-			c.Send(c.PID(), &stopSession{err: context.Canceled})
-			return
-		default:
-		}
 	}
 }
 
 // Parents -> Server -> Session
 type handler struct{}
 
-func newHandler() actor.Receiver {
-	return &handler{}
-}
+func newHandler() actor.Receiver { return &handler{} }
 
 func (handler) Receive(c *actor.Context) {
 	switch msg := c.Message().(type) {
@@ -234,7 +255,13 @@ func (handler) Receive(c *actor.Context) {
 		slog.Info("[handler]-> started", "pid", c.PID())
 	case actor.Stopped:
 		slog.Info("[handler]-> stopped", "pid", c.PID())
+
 	case []byte:
+		defer func() {
+			b := msg[:0]
+			framePool.Put(&b)
+		}()
+
 		packet := &packets.CosmosPacket{}
 		if err := proto.Unmarshal(msg, packet); err != nil {
 			slog.Info("[handler]-> error unmarshalling data", "err", err)
