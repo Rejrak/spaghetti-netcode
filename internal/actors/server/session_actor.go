@@ -22,33 +22,14 @@ type session struct {
 	dynEval *policy.DynamicEvaluator
 }
 
-func newSession(conn net.Conn, dyn *policy.DynamicEvaluator) actor.Producer {
+func newSession(conn net.Conn, dyn *policy.DynamicEvaluator, repo *sqlite.Repo) actor.Producer {
 	return func() actor.Receiver {
 		return &session{
 			conn:    conn,
 			dynEval: dyn,
+			repo:    repo,
 		}
 	}
-}
-
-func (s *session) readUserAttributes(c context.Context, address string) (*user.Attributes, error) {
-	repo, err := sqlite.Open("./authblock.db")
-	if err != nil {
-		slog.Info("[session]-> sqlite open error: %v", "err", err)
-		return nil, err
-	}
-	s.repo = repo
-	userAttrs, updated, ok, err := s.repo.GetAttrsExtended(c, address)
-	if err != nil {
-		slog.Error("[session]-> Failed to get user attributes", "err", err)
-		return nil, err
-	}
-	slog.Info("[session]-> Address Attrs", "attrs", userAttrs, "updated", updated, "ok", ok, "err", err)
-	if !ok {
-		s.repo.EnsureAddress(c, address, "")
-		return nil, fmt.Errorf("attributes not found")
-	}
-	return userAttrs, nil
 }
 
 func (s *session) Receive(c *actor.Context) {
@@ -58,6 +39,7 @@ func (s *session) Receive(c *actor.Context) {
 		slog.Info("[session]-> new connection", "addr", s.conn.RemoteAddr())
 		go s.readLoop(c)
 	case actor.Stopped:
+		s.repo.Close()
 		s.conn.Close()
 	case *packets.CosmosPacket:
 		slog.Info("[session]-> Handler: Received Cosmos packet:", "packet", msg)
@@ -92,6 +74,22 @@ func (s *session) Receive(c *actor.Context) {
 	default:
 		slog.Warn("[session]-> unknown message", "msg", msg)
 	}
+}
+
+func (s *session) readUserAttributes(c context.Context, address string) (*user.Attributes, error) {
+	defer s.repo.Close()
+
+	userAttrs, updated, ok, err := s.repo.GetAttrsExtended(c, address)
+	if err != nil {
+		slog.Error("[session]-> Failed to get user attributes", "err", err)
+		return nil, err
+	}
+	slog.Info("[session]-> Address Attrs", "attrs", userAttrs, "updated", updated, "ok", ok, "err", err)
+	if !ok {
+		s.repo.EnsureAddress(c, address, "")
+		return nil, fmt.Errorf("attributes not found")
+	}
+	return userAttrs, nil
 }
 
 func (s *session) checkOperationAndPermissions(op string, attrs *user.Attributes, msg *packets.AuthMessage) *packets.CosmosPacket_ResponseMessage {
@@ -135,6 +133,7 @@ func staticDeny(op string, attrs *user.Attributes) (bool, string) {
 	}
 	return false, ""
 }
+
 func (s *session) readLoop(c *actor.Context) {
 	buf := make([]byte, 1024)
 	var dataBuffer []byte

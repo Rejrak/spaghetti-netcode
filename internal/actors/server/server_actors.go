@@ -9,6 +9,7 @@ import (
 	"net"
 	"spaghetti/internal/actors/synchronizer"
 	"spaghetti/internal/remote/policy"
+	"spaghetti/internal/storage/sqlite"
 	"spaghetti/internal/utils/cache"
 	"strconv"
 	"time"
@@ -59,7 +60,6 @@ func (s *server) startSyncronizer(c *actor.Context) {
 		KeycloakClientID:           "spaghetti-service",
 		KeycloakClientSecret:       "nA3XmI7wgHnxdXepKGgMkJz66tyUbviJ",
 		KeycloakEnableWalletLookup: true,
-		// KeycloakWalletAttributeName: "walletAddress", // default già gestito
 	}
 
 	props := actor.Producer(func() actor.Receiver {
@@ -90,14 +90,6 @@ func (s *server) Receive(c *actor.Context) {
 	case *connAdd:
 		slog.Info("[server]-> added new connection to my map", "addr", msg.conn.RemoteAddr(), "pid", msg.pid)
 		s.sessions[msg.pid] = msg.conn
-		// var packet = &packets.Packet{}
-		// packet.SenderId = msg.pid.ID
-		// data, err := packets.ToBytes(packet)
-		// if err != nil {
-		// 	slog.Error("[server]-> Failed to  send init message", "err", err)
-		// }
-		// time.Sleep(time.Millisecond * 100)
-		// msg.conn.Write(data)
 
 	case *connRem:
 		slog.Debug("[server]-> removed connection from my map", "pid", msg.pid)
@@ -109,14 +101,24 @@ func (s *server) Receive(c *actor.Context) {
 
 func (s *server) acceptLoop(c *actor.Context) {
 	dynEval := initAttributesDynamicEvaluator()
+	repo, err := sqlite.Open("./authblock.db")
+	if err != nil {
+		slog.Info("[session]-> sqlite open error: %v", "err", err)
+		panic(err)
+	}
 	for {
 		conn, err := s.ln.Accept()
 		if err != nil {
 			slog.Error("[server]-> accept error", "err", err)
 			break
 		}
-		sid := rand.Intn(math.MaxInt)
-		pid := c.SpawnChild(newSession(conn, dynEval), "session", actor.WithID(strconv.Itoa(sid)))
+		sid := rand.New(rand.NewSource(time.Now().Unix())).Intn(math.MaxInt32)
+
+		session := newSession(conn, dynEval, repo)
+		actID := actor.WithID("session-" + strconv.Itoa(sid))
+
+		pid := c.SpawnChild(session, "session", actID)
+
 		c.Send(c.PID(), &connAdd{
 			sid:  sid,
 			pid:  pid,
