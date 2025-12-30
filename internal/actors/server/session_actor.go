@@ -16,9 +16,10 @@ import (
 )
 
 const (
-	maxFrameSize  = 1 << 20 // 1 MiB (adatta a te)
+	maxFrameSize  = 1 << 20
 	readDeadline  = 2 * time.Second
 	writeDeadline = 5 * time.Second
+	idleTimeout   = 30 * time.Second
 )
 
 type stopSession struct {
@@ -53,7 +54,6 @@ func (s *session) Receive(c *actor.Context) {
 	case actor.Started:
 		s.ctx, s.cancel = context.WithCancel(context.Background())
 
-		// evita WithID("handler") fisso (se Hollywood richiede univocità nel sottoalbero)
 		s.handlerPID = c.SpawnChild(newHandler, "handler")
 
 		slog.Info("[session]-> new connection", "addr", s.conn.RemoteAddr())
@@ -61,27 +61,19 @@ func (s *session) Receive(c *actor.Context) {
 		go s.readLoop(c)
 
 	case *stopSession:
-		// chiudi in modo deterministico
 		if msg.err != nil {
 			slog.Info("[session]-> stopping due to read error", "err", msg.err)
 		}
-		// notifica server rimozione + chiusura conn
 		c.Send(c.Parent(), &connRem{pid: c.PID()})
-
-		// stop actor dal thread actor
 		c.Engine().Poison(c.PID())
 
 	case actor.Stopped:
-		// stop goroutines
 		if s.cancel != nil {
 			s.cancel()
 		}
-		// chiusura conn sblocca eventuali Read/Write
 		if s.conn != nil {
 			_ = s.conn.Close()
 		}
-		// NON chiudere repo qui: è condiviso dal server
-		// _ = s.repo.Close()
 
 	case *packets.CosmosPacket:
 		slog.Info("[session]-> Handler: Received Cosmos packet:", "packet", msg)
@@ -113,7 +105,6 @@ func (s *session) Receive(c *actor.Context) {
 		_ = s.conn.SetWriteDeadline(time.Now().Add(writeDeadline))
 		if _, err := s.conn.Write(data); err != nil {
 			slog.Error("[session]-> write failed", "err", err)
-			// in caso di errore di scrittura, fermiamo la sessione
 			c.Send(c.PID(), &stopSession{err: err})
 			return
 		}
@@ -151,21 +142,22 @@ func (s *session) checkOperationAndPermissions(op string, attrs *user.Attributes
 
 func (s *session) readLoop(c *actor.Context) {
 	defer func() {
-		// qualsiasi uscita → chiedi stop sessione
-		// (se l’actor è già morto, il Send verrà ignorato)
 	}()
 
 	buf := make([]byte, 4096)
 	dataBuffer := make([]byte, 0, 8192)
+	lastActivity := time.Now()
 
 	for {
-		// permettiamo di interrompere un Read bloccante
 		_ = s.conn.SetReadDeadline(time.Now().Add(readDeadline))
 
 		n, err := s.conn.Read(buf)
 		if err != nil {
-			// se è un timeout, controlla se dobbiamo fermarci
 			if ne, ok := err.(net.Error); ok && ne.Timeout() {
+				if time.Since(lastActivity) >= idleTimeout {
+					c.Send(c.PID(), &stopSession{err: fmt.Errorf("idle timeout after %s", idleTimeout)})
+					return
+				}
 				select {
 				case <-s.ctx.Done():
 					c.Send(c.PID(), &stopSession{err: context.Canceled})
@@ -175,12 +167,11 @@ func (s *session) readLoop(c *actor.Context) {
 				}
 			}
 
-			// errore reale/EOF → stop
 			c.Send(c.PID(), &stopSession{err: err})
 			return
 		}
+		lastActivity = time.Now()
 
-		// append con guardia per evitare crescita infinita
 		dataBuffer = append(dataBuffer, buf[:n]...)
 		if len(dataBuffer) > maxFrameSize+4 {
 			c.Send(c.PID(), &stopSession{err: fmt.Errorf("buffer exceeds limit: %d", len(dataBuffer))})
@@ -208,16 +199,13 @@ func (s *session) readLoop(c *actor.Context) {
 
 			packetBytes := dataBuffer[4 : 4+msgLen]
 
-			// copia per isolare il payload (evita retention di dataBuffer)
 			tmp := make([]byte, len(packetBytes))
 			copy(tmp, packetBytes)
 
 			c.Send(s.handlerPID, tmp)
 
-			// consume
 			dataBuffer = dataBuffer[4+msgLen:]
 
-			// se buffer si è svuotato, rilascia memoria tenuta da slice grande
 			if len(dataBuffer) == 0 {
 				dataBuffer = make([]byte, 0, 8192)
 				break
@@ -245,7 +233,6 @@ func (handler) Receive(c *actor.Context) {
 	case actor.Started:
 		slog.Info("[handler]-> started", "pid", c.PID())
 	case actor.Stopped:
-		// evita sleep: ritarda stop e può trattenere risorse
 		slog.Info("[handler]-> stopped", "pid", c.PID())
 	case []byte:
 		packet := &packets.CosmosPacket{}

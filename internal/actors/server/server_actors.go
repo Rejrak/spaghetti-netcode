@@ -42,6 +42,8 @@ type server struct {
 
 	rndMu sync.Mutex
 	rnd   *rand.Rand
+
+	dynEval *policy.DynamicEvaluator
 }
 
 func NewServer(listenAddr string) actor.Producer {
@@ -93,6 +95,7 @@ func (s *server) Receive(c *actor.Context) {
 
 	case actor.Started:
 		s.startSyncronizer(c)
+		s.dynEval = initAttributesDynamicEvaluator()
 
 		ln, err := net.Listen("tcp", s.listenAddr)
 		if err != nil {
@@ -152,6 +155,10 @@ func (s *server) cleanup() {
 		}
 	}
 
+	if s.dynEval != nil && s.dynEval.Cache != nil {
+		s.dynEval.Cache.Close()
+	}
+
 	slog.Info("[server]-> cleanup completed")
 }
 
@@ -162,7 +169,11 @@ func (s *server) nextSID() int {
 }
 
 func (s *server) acceptLoop(c *actor.Context) {
-	dynEval := initAttributesDynamicEvaluator()
+	dynEval := s.dynEval
+	if dynEval == nil {
+		dynEval = initAttributesDynamicEvaluator()
+		s.dynEval = dynEval
+	}
 
 	for {
 		select {
