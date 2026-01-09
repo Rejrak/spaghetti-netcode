@@ -156,7 +156,12 @@ func (s *session) readUserAttributes(c context.Context, address string) (*user.A
 	return userAttrs, nil
 }
 
+// var count int64 = 0
+
 func (s *session) checkOperationAndPermissions(op string, attrs *user.Attributes, msg *packets.AuthMessage) *packets.CosmosPacket_ResponseMessage {
+	// atomic.AddInt64(&count, 1)
+	// success := count%10 != 0
+
 	return &packets.CosmosPacket_ResponseMessage{
 		ResponseMessage: &packets.ResponseMessage{
 			Success: true,
