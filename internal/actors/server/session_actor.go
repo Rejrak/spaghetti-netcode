@@ -71,6 +71,7 @@ func (s *session) Receive(c *actor.Context) {
 			slog.Error("[session]-> missing request ID in the received packet")
 			return
 		}
+
 		userAttrs, _ := s.readUserAttributes(c.Context(), auth.Address)
 		response := s.checkOperationAndPermissions(auth.Operation, userAttrs, auth)
 		resp := &packets.CosmosPacket{
@@ -78,6 +79,7 @@ func (s *session) Receive(c *actor.Context) {
 			Msg:       response,
 		}
 		data, err := packets.CosmosPacketToBytes(resp)
+
 		if err != nil {
 			slog.Error("[session]-> failed to serialize response", "err", err)
 			return
@@ -95,46 +97,57 @@ func (s *session) Receive(c *actor.Context) {
 }
 
 func (s *session) checkOperationAndPermissions(op string, attrs *user.Attributes, msg *packets.AuthMessage) *packets.CosmosPacket_ResponseMessage {
-	// 1) static decision
-	// if deny, why := staticDeny(op, attrs); deny {
-	// 	return &packets.CosmosPacket_ResponseMessage{
-	// 		ResponseMessage: &packets.ResponseMessage{Success: false, Message: why},
-	// 	}
-	// }
 
-	// 2) dynamic (balance >= 500 token)
-	// pc := &policy.Context{
-	// 	Session:   "", // se ce l’hai
-	// 	Address:   msg.Address,
-	// 	Operation: op,
-	// 	Resources: map[string]string{
-	// 		"count":      "100",
-	// 		"complexity": "1",
+	// static policy evaluation
+	// allow, reason := staticPolicyEvalutation(op, attrs)
+	// return &packets.CosmosPacket_ResponseMessage{
+	// 	ResponseMessage: &packets.ResponseMessage{
+	// 		Success: allow,
+	// 		Message: reason,
 	// 	},
 	// }
 
-	// ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
-	// defer cancel()
+	// dynamic policy evaluation
+	pc := &policy.Context{
+		Session:   "",
+		Address:   msg.Address,
+		Operation: op,
+		Resources: map[string]string{
+			"count":      "100",
+			"complexity": "1",
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	dec, _ := s.dynEval.Evaluate(ctx, pc)
 
-	// dec, _ := s.dynEval.Evaluate(ctx, pc)
 	return &packets.CosmosPacket_ResponseMessage{
 		ResponseMessage: &packets.ResponseMessage{
-			// Success: dec.Allow,
-			Success: true,
-			Message: "",
+			Success: dec.Allow,
+			Message: dec.Message,
 		},
 	}
 }
 
-func staticDeny(op string, attrs *user.Attributes) (bool, string) {
+func staticPolicyEvalutation(op string, attrs *user.Attributes) (bool, string) {
 	switch op {
 	case "/cosmos.bank.v1beta1.MsgSend":
-		if attrs.Perms["supply.harvest.create"] {
-			return true, "denied by static policy"
+		canSend := false
+		for _, role := range attrs.Roles {
+			if role == "office_manager" {
+				if attrs.Perms["portfolio.transaction.send"] {
+					canSend = true
+				}
+			}
 		}
+		if canSend {
+			return true, "permission granted"
+		}
+
 	}
-	return false, ""
+	return false, "denied by static policy missing rule"
 }
+
 func (s *session) readLoop(c *actor.Context) {
 	buf := make([]byte, 1024)
 	var dataBuffer []byte

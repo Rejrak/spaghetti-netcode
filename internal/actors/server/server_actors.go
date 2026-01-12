@@ -70,8 +70,8 @@ func (s *server) startSyncronizer(c *actor.Context) {
 }
 
 func (s *server) Receive(c *actor.Context) {
-	fmt.Printf("[server]-> Ricevuto messaggio di tipo: %T\n", c.Message())
-	fmt.Printf("[server]-> Valore messaggio: %+v\n", c.Message())
+	// fmt.Printf("[server]-> Ricevuto messaggio di tipo: %T\n", c.Message())
+	// fmt.Printf("[server]-> Valore messaggio: %+v\n", c.Message())
 
 	switch msg := c.Message().(type) {
 	case string:
@@ -90,14 +90,6 @@ func (s *server) Receive(c *actor.Context) {
 	case *connAdd:
 		slog.Info("[server]-> added new connection to my map", "addr", msg.conn.RemoteAddr(), "pid", msg.pid)
 		s.sessions[msg.pid] = msg.conn
-		// var packet = &packets.Packet{}
-		// packet.SenderId = msg.pid.ID
-		// data, err := packets.ToBytes(packet)
-		// if err != nil {
-		// 	slog.Error("[server]-> Failed to  send init message", "err", err)
-		// }
-		// time.Sleep(time.Millisecond * 100)
-		// msg.conn.Write(data)
 
 	case *connRem:
 		slog.Debug("[server]-> removed connection from my map", "pid", msg.pid)
