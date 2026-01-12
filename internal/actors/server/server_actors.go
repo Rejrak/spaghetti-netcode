@@ -89,6 +89,9 @@ func (s *server) startSyncronizer(c *actor.Context) {
 }
 
 func (s *server) Receive(c *actor.Context) {
+	// fmt.Printf("[server]-> Ricevuto messaggio di tipo: %T\n", c.Message())
+	// fmt.Printf("[server]-> Valore messaggio: %+v\n", c.Message())
+
 	switch msg := c.Message().(type) {
 	case string:
 		fmt.Printf("[server]-> Ricevuto messaggio di tipo string dal syncronizer: %s\n", msg)

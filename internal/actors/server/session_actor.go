@@ -114,6 +114,7 @@ func (s *session) Receive(c *actor.Context) {
 			Msg:       response,
 		}
 		data, err := packets.CosmosPacketToBytes(resp)
+
 		if err != nil {
 			slog.Error("[session]-> failed to serialize response", "err", err)
 			return
@@ -159,22 +160,61 @@ func (s *session) readUserAttributes(c context.Context, address string) (*user.A
 // var count int64 = 0
 
 func (s *session) checkOperationAndPermissions(op string, attrs *user.Attributes, msg *packets.AuthMessage) *packets.CosmosPacket_ResponseMessage {
-	// atomic.AddInt64(&count, 1)
-	// success := count%10 != 0
+
+	// static policy evaluation
+	// allow, reason := staticPolicyEvalutation(op, attrs)
+	// return &packets.CosmosPacket_ResponseMessage{
+	// 	ResponseMessage: &packets.ResponseMessage{
+	// 		Success: allow,
+	// 		Message: reason,
+	// 	},
+	// }
+
+	// dynamic policy evaluation
+	pc := &policy.Context{
+		Session:   "",
+		Address:   msg.Address,
+		Operation: op,
+		Resources: map[string]string{
+			"count":      "100",
+			"complexity": "1",
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	dec, _ := s.dynEval.Evaluate(ctx, pc)
 
 	return &packets.CosmosPacket_ResponseMessage{
 		ResponseMessage: &packets.ResponseMessage{
-			Success: true,
-			Message: "",
+			Success: dec.Allow,
+			Message: dec.Message,
 		},
 	}
 }
 
-func (s *session) readLoop(engine *actor.Engine, selfPID, handlerPID *actor.PID) {
-	buf := make([]byte, 4096)
-	dataBuffer := make([]byte, 0, 8192)
-	lastActivity := time.Now()
+func staticPolicyEvalutation(op string, attrs *user.Attributes) (bool, string) {
+	switch op {
+	case "/cosmos.bank.v1beta1.MsgSend":
+		canSend := false
+		for _, role := range attrs.Roles {
+			if role == "office_manager" {
+				if attrs.Perms["portfolio.transaction.send"] {
+					canSend = true
+				}
+			}
+		}
+		if canSend {
+			return true, "permission granted"
+		}
 
+	}
+	return false, "denied by static policy missing rule"
+}
+
+func (s *session) readLoop(c *actor.Context) {
+	buf := make([]byte, 1024)
+	var dataBuffer []byte
+	var handlerPID = fmt.Sprintf("%s/handler/session", c.PID().ID)
 	for {
 		select {
 		case <-s.ctx.Done():
