@@ -64,7 +64,6 @@ CREATE INDEX IF NOT EXISTS idx_users_updated_at ON users(updated_at);
 	return err
 }
 
-// EnsureAddress: crea l'utente se non esiste, senza toccare gli attributi.
 func (r *Repo) EnsureAddress(ctx context.Context, address, session string) error {
 	now := time.Now().Unix()
 	_, err := r.db.ExecContext(ctx, `
@@ -148,7 +147,6 @@ FROM users WHERE address=?`, address)
 		return nil, 0, false, err
 	}
 
-	// PERMS (solo true salvati)
 	ps, err := r.db.QueryContext(ctx, `SELECT perm FROM user_perms WHERE address=? AND value=1`, address)
 	if err != nil {
 		return nil, 0, false, err
@@ -245,7 +243,6 @@ func (r *Repo) ReplaceUserRolesPerms(ctx context.Context, address string, roles 
 		}
 	}()
 
-	// cancella esistenti
 	if _, err = tx.ExecContext(ctx, `DELETE FROM user_roles WHERE address=?`, address); err != nil {
 		return err
 	}
@@ -253,7 +250,6 @@ func (r *Repo) ReplaceUserRolesPerms(ctx context.Context, address string, roles 
 		return err
 	}
 
-	// inserisci ruoli
 	if len(roles) > 0 {
 		stmtR, err := tx.PrepareContext(ctx, `INSERT INTO user_roles(address, role) VALUES(?, ?)`)
 		if err != nil {
@@ -281,7 +277,6 @@ func (r *Repo) ReplaceUserRolesPerms(ctx context.Context, address string, roles 
 				continue
 			}
 			val := 0
-			// log.Default().Printf("[repo] --> Setting perm %s = %v for user %s", p, v, address)
 			if v {
 				val = 1
 			}
@@ -362,7 +357,7 @@ func (r *Repo) ReplaceManyUsersRolesPerms(ctx context.Context, rows []RolesPerms
 			}
 			if !v {
 				continue
-			} // tieni solo true
+			}
 			if _, err = insPerm.ExecContext(ctx, row.Address, p, 1); err != nil {
 				return err
 			}
