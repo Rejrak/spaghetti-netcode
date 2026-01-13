@@ -126,6 +126,8 @@ func (c *AttributesClient) Evaluate(ctx context.Context, in *Context) (Decision,
 		msg = fmt.Sprintf("ok: %d attrs, total_eval_time %.2fms", len(out.Attributes), out.TotalEvalTimeMs)
 	}
 
+	msg = fmt.Sprintf("ok: %d attrs, total_eval_time %.2fms", len(out.Attributes), out.TotalEvalTimeMs)
+
 	return Decision{
 		Allow:   allow,
 		Message: msg,
