@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math/rand"
 	"net"
 	"spaghetti/internal/pkg/packets"
 	"spaghetti/internal/remote/policy"
@@ -20,6 +21,7 @@ type session struct {
 	conn    net.Conn
 	repo    *sqlite.Repo
 	dynEval *policy.DynamicEvaluator
+	counter uint64
 }
 
 func newSession(conn net.Conn, dyn *policy.DynamicEvaluator) actor.Producer {
@@ -97,36 +99,44 @@ func (s *session) Receive(c *actor.Context) {
 }
 
 func (s *session) checkOperationAndPermissions(op string, attrs *user.Attributes, msg *packets.AuthMessage) *packets.CosmosPacket_ResponseMessage {
-
-	// static policy evaluation
-	// allow, reason := staticPolicyEvalutation(op, attrs)
-	// return &packets.CosmosPacket_ResponseMessage{
-	// 	ResponseMessage: &packets.ResponseMessage{
-	// 		Success: allow,
-	// 		Message: reason,
-	// 	},
-	// }
-
-	// dynamic policy evaluation
-	pc := &policy.Context{
-		Session:   "",
-		Address:   msg.Address,
-		Operation: op,
-		Resources: map[string]string{
-			"count":      "100",
-			"complexity": "1",
-		},
+	// n := atomic.AddUint64(&s.counter, 1)
+	// success := n%10 != 0
+	// // static policy evaluation
+	// // allow, reason := staticPolicyEvalutation(op, attrs)
+	sec := rand.Intn(9)
+	decSec := rand.Intn(7) * 10
+	final := sec + decSec // int
+	if final < 40 {
+		final = final + 40
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
-	defer cancel()
-	dec, _ := s.dynEval.Evaluate(ctx, pc)
-
+	time.Sleep(time.Duration(final) * time.Millisecond)
 	return &packets.CosmosPacket_ResponseMessage{
 		ResponseMessage: &packets.ResponseMessage{
-			Success: dec.Allow,
-			Message: dec.Message,
+			Success: true,
+			Message: "",
 		},
 	}
+
+	// dynamic policy evaluation
+	// pc := &policy.Context{
+	// 	Session:   "",
+	// 	Address:   msg.Address,
+	// 	Operation: op,
+	// 	Resources: map[string]string{
+	// 		"count":      "1",
+	// 		"complexity": "1",
+	// 	},
+	// }
+	// ctx, cancel := context.WithTimeout(context.Background(), 1000*time.Millisecond)
+	// defer cancel()
+	// dec, _ := s.dynEval.Evaluate(ctx, pc)
+
+	// return &packets.CosmosPacket_ResponseMessage{
+	// 	ResponseMessage: &packets.ResponseMessage{
+	// 		Success: dec.Allow,
+	// 		Message: dec.Message,
+	// 	},
+	// }
 }
 
 func staticPolicyEvalutation(op string, attrs *user.Attributes) (bool, string) {
@@ -143,9 +153,8 @@ func staticPolicyEvalutation(op string, attrs *user.Attributes) (bool, string) {
 		if canSend {
 			return true, "permission granted"
 		}
-
 	}
-	return false, "denied by static policy missing rule"
+	return true, "allowed by static policy but missing rule (failOpen true)" // you can choos to apply failOpen policy even here
 }
 
 func (s *session) readLoop(c *actor.Context) {

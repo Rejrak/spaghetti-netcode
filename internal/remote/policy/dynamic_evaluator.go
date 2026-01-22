@@ -25,7 +25,7 @@ func (e *DynamicEvaluator) Evaluate(ctx context.Context, pc *Context) (Decision,
 
 	d, err := e.Client.Evaluate(tctx, pc)
 	if err != nil {
-		log.Default().Printf("FAIL OPEN: %v", e.FailOpen)
+		log.Default().Printf("FAIL OPEN: %v + error: %v", e.FailOpen, err)
 		if e.FailOpen {
 			return Decision{Allow: true, Message: "dynamic backend error; allowed (fail-open)"}, nil
 		}

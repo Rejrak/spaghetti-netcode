@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package gossip;
+
+// ConfigSync service handles configuration synchronization across nodes.
+service ConfigSync {
+  // GossipVersion exchanges version information between nodes to detect configuration drift.
+  rpc GossipVersion (ConfigVersion) returns (ConfigVersionResponse);
+  // GetConfig retrieves the current configuration snapshot from a node.
+  rpc GetConfig     (GetConfigRequest) returns (ConfigSnapshot);
+  // PushConfig sends a configuration snapshot to other nodes for synchronization.
+  rpc PushConfig    (ConfigSnapshot) returns (Ack);
+}
+
+message ConfigVersion {
+  string node_id = 1;
+  uint64 version = 2;
+}
+
+message ConfigVersionResponse {
+  uint64 version = 1;
+  string hash    = 2;
+}
+
+message GetConfigRequest {
+  uint64 since_version = 1;
+}
+
+message ConfigSnapshot {
+  string node_id     = 1;
+  uint64 version     = 2;
+  bytes  config_json = 3;
+  string hash        = 4;
+}
+
+message Ack {
+  bool applied = 1;
+}
