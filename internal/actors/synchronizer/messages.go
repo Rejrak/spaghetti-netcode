@@ -23,6 +23,7 @@ type Config struct {
 
 	KeycloakBaseURL             string // es: https://keycloak.example.com
 	KeycloakRealm               string // es: myrealm
+	KeycloakClientSecret        string // es: supersecret
 	KeycloakClientID            string // es: spaghetti-service
 	KeycloakWalletAttributeName string // opzionale, default: "walletAddress"
 	KeycloakEnableWalletLookup  bool   // se true, cerca utente anche per attributo wallet
