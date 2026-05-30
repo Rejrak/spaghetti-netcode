@@ -1,0 +1,57 @@
+syntax = "proto3";
+package alpha.authzattrs.v1;
+
+import "alpha/authzattrs/v1/types.proto";
+import "amino/amino.proto";
+import "cosmos/msg/v1/msg.proto";
+import "cosmos_proto/cosmos.proto";
+import "gogoproto/gogo.proto";
+
+option go_package = "alpha/x/authzattrs/api";
+
+service Msg {
+  option (cosmos.msg.v1.service) = true;
+
+  rpc UpsertAuthorization(MsgUpsertAuthorization) returns (MsgUpsertAuthorizationResponse);
+  rpc BatchUpsertAuthorizations(MsgBatchUpsertAuthorizations) returns (MsgBatchUpsertAuthorizationsResponse);
+  rpc RevokeAuthorization(MsgRevokeAuthorization) returns (MsgRevokeAuthorizationResponse);
+}
+
+message MsgUpsertAuthorization {
+  option (cosmos.msg.v1.signer) = "authority";
+  option (amino.name) = "alpha/x/authzattrs/MsgUpsertAuthorization";
+
+  string authority = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  AuthzRecord record = 2 [
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}
+
+message MsgUpsertAuthorizationResponse {}
+
+message MsgBatchUpsertAuthorizations {
+  option (cosmos.msg.v1.signer) = "sender";
+  option (amino.name) = "alpha/x/authzattrs/MsgBatchUpsertAuthorizations";
+
+  string sender = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  repeated AuthzRecord records = 2 [(gogoproto.nullable) = false];
+  uint64 issuer_set_id = 3;
+  uint64 policy_version = 4;
+  repeated IssuerSignature signatures = 5 [(gogoproto.nullable) = false];
+}
+
+message MsgBatchUpsertAuthorizationsResponse {
+  uint32 processed_count = 1;
+}
+
+message MsgRevokeAuthorization {
+  option (cosmos.msg.v1.signer) = "authority";
+  option (amino.name) = "alpha/x/authzattrs/MsgRevokeAuthorization";
+
+  string authority = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  string address = 2 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  string msg_type = 3;
+}
+
+message MsgRevokeAuthorizationResponse {}

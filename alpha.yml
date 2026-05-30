@@ -1,0 +1,79 @@
+version: 1
+
+accounts:
+  - name: alice
+    coins:
+      - 5000000token
+      - 100000000stake
+  - name: alice1
+    mnemonic: "bomb pencil bubble pluck guide mixed hill vanish bacon image reform orphan clog benefit dog goddess other cupboard drama joy outer jar spray render"
+    coins:
+      - 5000000token
+      - 100000000stake
+  - name: alice2
+    coins:
+      - 5000000token
+      - 100000000stake
+  - name: alice3
+    coins:
+      - 5000000token
+      - 100000000stake
+  - name: alice4
+    coins:
+      - 5000000token
+      - 100000000stake
+  - name: alice5
+    coins:
+      - 5000000token
+      - 100000000stake
+  - name: alice6
+    coins:
+      - 5000000token
+      - 100000000stake
+  - name: alice7
+    coins:
+      - 5000000token
+      - 100000000stake
+  - name: alice8
+    coins:
+      - 5000000token
+      - 100000000stake
+  - name: alice9
+    coins:
+      - 5000000token
+      - 100000000stake
+  - name: alice10
+    coins:
+      - 5000000token
+      - 100000000stake
+  - name: bob
+    coins:
+      - 50000000token
+      - 100000stake
+
+faucet:
+  name: bob
+  coins:
+    - 5token
+    - 100000stake
+  port: 4501
+
+genesis:
+  chain_id: alpha-1
+
+validators:
+  - name: alice
+    bonded: 100000000stake
+    app:
+      api:
+        address: 0.0.0.0:1317
+      grpc:
+        address: 0.0.0.0:9090
+      grpc-web:
+        address: 0.0.0.0:9091
+    config:
+      p2p:
+        laddr: "tcp://0.0.0.0:26658"
+      rpc:
+        laddr: "tcp://0.0.0.0:26657"
+        pprof_laddr: "0.0.0.0:6060"

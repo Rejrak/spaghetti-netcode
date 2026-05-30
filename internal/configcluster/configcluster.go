@@ -18,7 +18,6 @@ type ClusterConfig struct {
 	KeycloakBaseURL             string
 	KeycloakRealm               string
 	KeycloakClientID            string
-	KeycloakClientSecret        string
 	KeycloakWalletAttributeName string
 	KeycloakEnableWalletLookup  bool
 
@@ -30,9 +29,10 @@ type ClusterConfig struct {
 }
 
 type ConfigSnapshot struct {
-	Version Version
-	Data    ClusterConfig
-	Hash    string // opzionale per debug/integrita
+	Version    Version
+	Data       ClusterConfig
+	Hash       string // opzionale per debug/integrita
+	Signatures map[NodeID]string // Mappa NodeID -> Firma dell'hash per il quorum
 }
 
 type VersionStamp struct {

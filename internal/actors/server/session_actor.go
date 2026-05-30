@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"math/rand"
 	"net"
 	"spaghetti/internal/pkg/packets"
 	"spaghetti/internal/remote/policy"
@@ -99,44 +98,62 @@ func (s *session) Receive(c *actor.Context) {
 }
 
 func (s *session) checkOperationAndPermissions(op string, attrs *user.Attributes, msg *packets.AuthMessage) *packets.CosmosPacket_ResponseMessage {
-	// n := atomic.AddUint64(&s.counter, 1)
-	// success := n%10 != 0
-	// // static policy evaluation
-	// // allow, reason := staticPolicyEvalutation(op, attrs)
-	sec := rand.Intn(9)
-	decSec := rand.Intn(7) * 10
-	final := sec + decSec // int
-	if final < 40 {
-		final = final + 40
+	// Comportamento CheckTx: filtro mempool.
+	// Se l'utente non ha gli attributi necessari, rifiutiamo subito in CheckTx per salvare gas.
+	// Se il servizio ha problemi (doubtful/degraded), rifiutiamo per prudenza (fail closed).
+	// La catena in DeliverTx userà lo stato on-chain finale (tramite i batch authz).
+
+	if attrs == nil {
+		slog.Warn("[session]-> Mempool filter: no attributes found, rejecting tx", "op", op, "address", msg.Address)
+		return &packets.CosmosPacket_ResponseMessage{
+			ResponseMessage: &packets.ResponseMessage{
+				Success: false,
+				Message: "CheckTx rejected: no attributes found",
+			},
+		}
 	}
-	time.Sleep(time.Duration(final) * time.Millisecond)
-	return &packets.CosmosPacket_ResponseMessage{
-		ResponseMessage: &packets.ResponseMessage{
-			Success: true,
-			Message: "",
+
+	allow, reason := staticPolicyEvalutation(op, attrs)
+	if !allow {
+		slog.Warn("[session]-> Mempool filter: static policy rejected", "op", op, "address", msg.Address, "reason", reason)
+		return &packets.CosmosPacket_ResponseMessage{
+			ResponseMessage: &packets.ResponseMessage{
+				Success: false,
+				Message: "CheckTx rejected: " + reason,
+			},
+		}
+	}
+
+	pc := &policy.Context{
+		Session:   "",
+		Address:   msg.Address,
+		Operation: op,
+		Resources: map[string]string{
+			"count":      "1",
+			"complexity": "1",
 		},
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond) // Short timeout per mempool
+	defer cancel()
 
-	// dynamic policy evaluation
-	// pc := &policy.Context{
-	// 	Session:   "",
-	// 	Address:   msg.Address,
-	// 	Operation: op,
-	// 	Resources: map[string]string{
-	// 		"count":      "1",
-	// 		"complexity": "1",
-	// 	},
-	// }
-	// ctx, cancel := context.WithTimeout(context.Background(), 1000*time.Millisecond)
-	// defer cancel()
-	// dec, _ := s.dynEval.Evaluate(ctx, pc)
+	dec, err := s.dynEval.Evaluate(ctx, pc)
+	if err != nil {
+		slog.Warn("[session]-> Mempool filter: dynamic evaluator doubtful/error, rejecting tx", "op", op, "address", msg.Address, "err", err)
+		return &packets.CosmosPacket_ResponseMessage{
+			ResponseMessage: &packets.ResponseMessage{
+				Success: false, // Doubtful -> reject in CheckTx
+				Message: "CheckTx rejected: service degraded or doubtful",
+			},
+		}
+	}
 
-	// return &packets.CosmosPacket_ResponseMessage{
-	// 	ResponseMessage: &packets.ResponseMessage{
-	// 		Success: dec.Allow,
-	// 		Message: dec.Message,
-	// 	},
-	// }
+	slog.Info("[session]-> Mempool filter: passing tx", "op", op, "address", msg.Address, "decision", dec.Allow)
+	return &packets.CosmosPacket_ResponseMessage{
+		ResponseMessage: &packets.ResponseMessage{
+			Success: dec.Allow,
+			Message: dec.Message,
+		},
+	}
 }
 
 func staticPolicyEvalutation(op string, attrs *user.Attributes) (bool, string) {

@@ -102,13 +102,27 @@ func (a *ConfigActor) Receive(c *actor.Context) {
 	case *RemoteSnapshot:
 		incoming := configcluster.VersionStamp{Version: msg.Snapshot.Version, NodeID: msg.FromNode}
 
-		if !incoming.IsNewerThan(a.lastWriter) {
-			slog.Info("[config] REMOTE ignored",
+		// Invece del Last-Writer-Wins, usiamo le firme (Quorum)
+		quorumSize := 2 // Esempio di quorum minimo
+		if len(msg.Snapshot.Signatures) < quorumSize {
+			slog.Info("[config] REMOTE ignored (no quorum)",
+				"node", a.localNode,
+				"fromNode", msg.FromNode,
+				"incomingVersion", msg.Snapshot.Version,
+				"signatures", len(msg.Snapshot.Signatures),
+			)
+			if msg.Reply != nil {
+				msg.Reply <- false
+			}
+			return
+		}
+
+		if msg.Snapshot.Version <= a.current.Version {
+			slog.Info("[config] REMOTE ignored (older version)",
 				"node", a.localNode,
 				"fromNode", msg.FromNode,
 				"incomingVersion", msg.Snapshot.Version,
 				"currentVersion", a.current.Version,
-				"currentWriter", a.lastWriter.NodeID,
 			)
 			if msg.Reply != nil {
 				msg.Reply <- false

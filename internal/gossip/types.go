@@ -18,8 +18,9 @@ type GetConfigRequest struct {
 type ConfigSnapshot struct {
 	NodeID     string `json:"node_id"`
 	Version    uint64 `json:"version"`
-	ConfigJSON []byte `json:"config_json"`
-	Hash       string `json:"hash"`
+	ConfigJSON []byte            `json:"config_json"`
+	Hash       string            `json:"hash"`
+	Signatures map[string]string `json:"signatures"`
 }
 
 type Ack struct {

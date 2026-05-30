@@ -79,7 +79,6 @@ func (s *server) startSyncronizer(c *actor.Context) {
 		KeycloakBaseURL:             cfgData.KeycloakBaseURL,
 		KeycloakRealm:               cfgData.KeycloakRealm,
 		KeycloakClientID:            cfgData.KeycloakClientID,
-		KeycloakClientSecret:        cfgData.KeycloakClientSecret,
 		KeycloakEnableWalletLookup:  cfgData.KeycloakEnableWalletLookup,
 		KeycloakWalletAttributeName: cfgData.KeycloakWalletAttributeName,
 		// KeycloakWalletAttributeName: "walletAddress", // default già gestito
@@ -108,7 +107,6 @@ func (s *server) Receive(c *actor.Context) {
 				KeycloakBaseURL:             "http://localhost:8080",
 				KeycloakRealm:               "cosmos",
 				KeycloakClientID:            "spaghetti-service",
-				KeycloakClientSecret:        "nA3XmI7wgHnxdXepKGgMkJz66tyUbviJ",
 				KeycloakWalletAttributeName: "",
 				KeycloakEnableWalletLookup:  true,
 

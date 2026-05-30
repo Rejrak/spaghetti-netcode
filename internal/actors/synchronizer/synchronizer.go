@@ -74,7 +74,6 @@ func (s *Syncronizer) onStart(c *actor.Context) {
 			BaseURL:                     s.cfg.KeycloakBaseURL,
 			Realm:                       s.cfg.KeycloakRealm,
 			ClientID:                    s.cfg.KeycloakClientID,
-			ClientSecret:                s.cfg.KeycloakClientSecret,
 			Timeout:                     s.cfg.RemoteTimeout,
 			EnableWalletAttributeLookup: s.cfg.KeycloakEnableWalletLookup,
 			WalletAttributeName:         s.cfg.KeycloakWalletAttributeName,
