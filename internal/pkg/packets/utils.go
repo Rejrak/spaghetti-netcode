@@ -9,7 +9,7 @@ import (
 func CosmosPacketToBytes(packet *CosmosPacket) ([]byte, error) {
 	out, err := proto.Marshal(packet)
 	if err != nil {
-		slog.Info("error marshalling packet: %v", err)
+		slog.Error("failed to marshal packet", "err", err)
 		return nil, err
 	}
 	msgLen := len(out)

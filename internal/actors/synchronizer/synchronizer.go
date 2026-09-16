@@ -3,6 +3,8 @@ package synchronizer
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"spaghetti/internal/observability"
 	"spaghetti/internal/remote"
 	kc "spaghetti/internal/remote/keycloak"
 	"spaghetti/internal/storage/sqlite"
@@ -10,7 +12,6 @@ import (
 	"time"
 
 	"github.com/anthdm/hollywood/actor"
-	"golang.org/x/exp/slog"
 )
 
 // Parent -> Server
@@ -54,7 +55,7 @@ func NewSyncronizer(cfg Config) actor.Receiver {
 }
 
 func (s *Syncronizer) dbg(format string, args ...any) {
-	slog.Info("[sync] --> "+format, args...)
+	slog.Info(fmt.Sprintf("[sync] --> "+format, args...))
 }
 
 func (s *Syncronizer) onStart(c *actor.Context) {
@@ -118,12 +119,29 @@ func (s *Syncronizer) runSyncOnce(c *actor.Context) {
 		FetchAllUsers(ctx context.Context) ([]*user.User, error)
 	}
 	if au, ok := s.remote.(allUsersCap); ok {
+		started := time.Now()
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		all, err := au.FetchAllUsers(ctx)
 		cancel()
 		if err != nil {
+			slog.Warn(observability.EventKeycloakSync,
+				"component", "synchronizer",
+				"outcome", "error",
+				"reason_code", "KEYCLOAK_SYNC_ERROR",
+				"duration_ms", time.Since(started).Milliseconds(),
+				"err", err,
+			)
 			s.dbg("FetchAllUsers error: %v", err)
-		} else if len(all) > 0 {
+		} else {
+			slog.Info(observability.EventKeycloakSync,
+				"component", "synchronizer",
+				"outcome", "success",
+				"reason_code", "KEYCLOAK_SYNC_OK",
+				"user_count", len(all),
+				"duration_ms", time.Since(started).Milliseconds(),
+			)
+		}
+		if err == nil && len(all) > 0 {
 			batchCRUD := make(map[string]*user.Attributes, len(all))
 
 			batchRP := make([]sqlite.RolesPermsRow, 0, len(all))

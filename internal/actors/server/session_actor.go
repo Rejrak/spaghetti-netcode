@@ -2,10 +2,13 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
-	"math/rand"
 	"net"
+	"spaghetti/internal/observability"
 	"spaghetti/internal/pkg/packets"
 	"spaghetti/internal/remote/policy"
 	"spaghetti/internal/storage/sqlite"
@@ -16,41 +19,56 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+var (
+	errAttributesNotFound = errors.New("attributes not found")
+	errAttributesStale    = errors.New("attributes are stale")
+)
+
 // Parents -> Server
 type session struct {
-	conn    net.Conn
-	repo    *sqlite.Repo
-	dynEval *policy.DynamicEvaluator
-	counter uint64
+	conn      net.Conn
+	dbPath    string
+	maxAge    time.Duration
+	evaluator policy.PolicyEvaluator
+	logger    *slog.Logger
 }
 
-func newSession(conn net.Conn, dyn *policy.DynamicEvaluator) actor.Producer {
+func newSession(conn net.Conn, dbPath string, maxAge time.Duration, evaluator policy.PolicyEvaluator, logger *slog.Logger) actor.Producer {
 	return func() actor.Receiver {
 		return &session{
-			conn:    conn,
-			dynEval: dyn,
+			conn:      conn,
+			dbPath:    dbPath,
+			maxAge:    maxAge,
+			evaluator: evaluator,
+			logger:    logger,
 		}
 	}
 }
 
 func (s *session) readUserAttributes(c context.Context, address string) (*user.Attributes, error) {
-	repo, err := sqlite.Open("./authblock.db")
+	repo, err := sqlite.Open(s.dbPath)
 	if err != nil {
-		slog.Info("[session]-> sqlite open error: %v", "err", err)
+		slog.Error("[session]-> sqlite open error", "err", err)
 		return nil, err
 	}
-	s.repo = repo
-	userAttrs, updated, ok, err := s.repo.GetAttrsExtended(c, address)
+	defer repo.Close()
+	userAttrs, updated, ok, err := repo.GetAttrsExtended(c, address)
 	if err != nil {
 		slog.Error("[session]-> Failed to get user attributes", "err", err)
 		return nil, err
 	}
-	slog.Info("[session]-> Address Attrs", "attrs", userAttrs, "updated", updated, "ok", ok, "err", err)
 	if !ok {
-		s.repo.EnsureAddress(c, address, "")
-		return nil, fmt.Errorf("attributes not found")
+		_ = repo.EnsureAddress(c, address, "")
+		return nil, errAttributesNotFound
+	}
+	if !attributesAreFresh(updated, s.maxAge, time.Now()) {
+		return nil, errAttributesStale
 	}
 	return userAttrs, nil
+}
+
+func attributesAreFresh(updated int64, maxAge time.Duration, now time.Time) bool {
+	return updated > 0 && maxAge > 0 && now.Sub(time.Unix(updated, 0)) <= maxAge
 }
 
 func (s *session) Receive(c *actor.Context) {
@@ -74,8 +92,18 @@ func (s *session) Receive(c *actor.Context) {
 			return
 		}
 
-		userAttrs, _ := s.readUserAttributes(c.Context(), auth.Address)
-		response := s.checkOperationAndPermissions(auth.Operation, userAttrs, auth)
+		started := time.Now()
+		userAttrs, attrsErr := s.readUserAttributes(c.Context(), auth.Address)
+		if errors.Is(attrsErr, errAttributesNotFound) {
+			attrsErr = nil
+		}
+		decision := evaluatePolicy(c.Context(), s.evaluator, policy.PolicyInput{
+			Subject:    auth.Address,
+			Operation:  auth.Operation,
+			Attributes: userAttrs,
+		}, attrsErr)
+		s.logPolicyDecision(c.Context(), auth.Address, auth.Operation, decision, started)
+		response := decisionResponse(decision)
 		resp := &packets.CosmosPacket{
 			RequestId: reqID,
 			Msg:       response,
@@ -98,63 +126,58 @@ func (s *session) Receive(c *actor.Context) {
 	}
 }
 
-func (s *session) checkOperationAndPermissions(op string, attrs *user.Attributes, msg *packets.AuthMessage) *packets.CosmosPacket_ResponseMessage {
-	// n := atomic.AddUint64(&s.counter, 1)
-	// success := n%10 != 0
-	// // static policy evaluation
-	// // allow, reason := staticPolicyEvalutation(op, attrs)
-	sec := rand.Intn(9)
-	decSec := rand.Intn(7) * 10
-	final := sec + decSec // int
-	if final < 40 {
-		final = final + 40
+func evaluatePolicy(ctx context.Context, evaluator policy.PolicyEvaluator, input policy.PolicyInput, inputErr error) policy.PolicyDecision {
+	if errors.Is(inputErr, errAttributesStale) {
+		return policy.PolicyDecision{
+			ReasonCode: policy.ReasonInputStale,
+			Reason:     "normalized attributes are stale",
+		}
 	}
-	time.Sleep(time.Duration(final) * time.Millisecond)
-	return &packets.CosmosPacket_ResponseMessage{
-		ResponseMessage: &packets.ResponseMessage{
-			Success: true,
-			Message: "",
-		},
+	if inputErr == nil && evaluator != nil {
+		decision, err := evaluator.Evaluate(ctx, input)
+		if err == nil && decision.ReasonCode != "" && (!decision.Allow || (decision.PolicyID != "" && decision.PolicyVersion != "")) {
+			return decision
+		}
+		decision.Allow = false
+		decision.ReasonCode = policy.ReasonEvaluationError
+		decision.Reason = "policy evaluation failed closed"
+		return decision
 	}
-
-	// dynamic policy evaluation
-	// pc := &policy.Context{
-	// 	Session:   "",
-	// 	Address:   msg.Address,
-	// 	Operation: op,
-	// 	Resources: map[string]string{
-	// 		"count":      "1",
-	// 		"complexity": "1",
-	// 	},
-	// }
-	// ctx, cancel := context.WithTimeout(context.Background(), 1000*time.Millisecond)
-	// defer cancel()
-	// dec, _ := s.dynEval.Evaluate(ctx, pc)
-
-	// return &packets.CosmosPacket_ResponseMessage{
-	// 	ResponseMessage: &packets.ResponseMessage{
-	// 		Success: dec.Allow,
-	// 		Message: dec.Message,
-	// 	},
-	// }
+	return policy.PolicyDecision{
+		ReasonCode: policy.ReasonEvaluationError,
+		Reason:     "policy evaluation failed closed",
+	}
 }
 
-func staticPolicyEvalutation(op string, attrs *user.Attributes) (bool, string) {
-	switch op {
-	case "/cosmos.bank.v1beta1.MsgSend":
-		canSend := false
-		for _, role := range attrs.Roles {
-			if role == "office_manager" {
-				if attrs.Perms["portfolio.transaction.send"] {
-					canSend = true
-				}
-			}
-		}
-		if canSend {
-			return true, "permission granted"
-		}
+func decisionResponse(decision policy.PolicyDecision) *packets.CosmosPacket_ResponseMessage {
+	return &packets.CosmosPacket_ResponseMessage{
+		ResponseMessage: &packets.ResponseMessage{
+			Success: decision.Allow,
+			Message: decision.ReasonCode + ": " + decision.Reason,
+		},
 	}
-	return true, "allowed by static policy but missing rule (failOpen true)" // you can choos to apply failOpen policy even here
+}
+
+func (s *session) logPolicyDecision(ctx context.Context, subject, operation string, decision policy.PolicyDecision, started time.Time) {
+	logger := s.logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	outcome := "deny"
+	if decision.Allow {
+		outcome = "allow"
+	}
+	sum := sha256.Sum256([]byte(subject))
+	logger.InfoContext(ctx, observability.EventPolicyEvaluated,
+		"component", "policy",
+		"operation", operation,
+		"outcome", outcome,
+		"reason_code", decision.ReasonCode,
+		"policy_id", decision.PolicyID,
+		"policy_version", decision.PolicyVersion,
+		"subject_hash", hex.EncodeToString(sum[:]),
+		"duration_ms", time.Since(started).Milliseconds(),
+	)
 }
 
 func (s *session) readLoop(c *actor.Context) {

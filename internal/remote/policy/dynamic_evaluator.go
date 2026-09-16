@@ -7,6 +7,9 @@ import (
 	"time"
 )
 
+// DynamicEvaluator is a legacy remote-evaluation adapter. The runtime policy
+// path uses PolicyEvaluator; FailOpen is retained only for legacy compatibility.
+// Deprecated: do not use for authorization decisions.
 type DynamicEvaluator struct {
 	Client   DynamicPolicyClient
 	Timeout  time.Duration

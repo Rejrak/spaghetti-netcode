@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"log/slog"
 	"os"
 	"os/signal"
 	"spaghetti/internal/actors/gossipactor"
@@ -28,13 +29,18 @@ func main() {
 		*gossipPeers = os.Getenv("SPAGHETTI_GOSSIP_PEERS")
 	}
 	peers := parsePeers(*gossipPeers)
+	runtimeCfg, err := server.LoadRuntimeConfigFromEnv()
+	if err != nil {
+		slog.Error("invalid runtime configuration", "err", err)
+		os.Exit(1)
+	}
 
 	e, err := actor.NewEngine(actor.NewEngineConfig())
 	if err != nil {
 		panic(err)
 	}
 
-	serverPID := e.Spawn(server.NewServer(*listenAddr, *gossipAddr, peers), "server")
+	serverPID := e.Spawn(server.NewServer(*listenAddr, *gossipAddr, peers, runtimeCfg), "server")
 
 	sigch := make(chan os.Signal, 1)
 	signal.Notify(sigch, syscall.SIGINT, syscall.SIGTERM)

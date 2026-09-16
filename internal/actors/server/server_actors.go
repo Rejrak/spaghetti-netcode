@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
-	"math/big"
 	"math/rand"
 	"net"
 	configactors "spaghetti/internal/actors/config"
@@ -13,7 +12,6 @@ import (
 	"spaghetti/internal/configcluster"
 	"spaghetti/internal/gossip"
 	"spaghetti/internal/remote/policy"
-	"spaghetti/internal/utils/cache"
 	"strconv"
 	"time"
 
@@ -43,16 +41,18 @@ type server struct {
 	gossipServer   *grpc.Server
 	gossipListener net.Listener
 	localNodeID    configcluster.NodeID
+	runtimeConfig  RuntimeConfig
 	// mutex      sync.Mutex
 }
 
-func NewServer(listenAddr string, gossipAddr string, peers []gossipactor.PeerInfo) actor.Producer {
+func NewServer(listenAddr string, gossipAddr string, peers []gossipactor.PeerInfo, cfg RuntimeConfig) actor.Producer {
 	return func() actor.Receiver {
 		return &server{
-			listenAddr:  listenAddr,
-			sessions:    make(map[*actor.PID]net.Conn),
-			gossipAddr:  gossipAddr,
-			gossipPeers: peers,
+			listenAddr:    listenAddr,
+			sessions:      make(map[*actor.PID]net.Conn),
+			gossipAddr:    gossipAddr,
+			gossipPeers:   peers,
+			runtimeConfig: cfg,
 		}
 	}
 }
@@ -79,7 +79,7 @@ func (s *server) startSyncronizer(c *actor.Context) {
 		KeycloakBaseURL:             cfgData.KeycloakBaseURL,
 		KeycloakRealm:               cfgData.KeycloakRealm,
 		KeycloakClientID:            cfgData.KeycloakClientID,
-		KeycloakClientSecret:        cfgData.KeycloakClientSecret,
+		KeycloakClientSecret:        s.runtimeConfig.KeycloakClientSecret,
 		KeycloakEnableWalletLookup:  cfgData.KeycloakEnableWalletLookup,
 		KeycloakWalletAttributeName: cfgData.KeycloakWalletAttributeName,
 		// KeycloakWalletAttributeName: "walletAddress", // default già gestito
@@ -102,18 +102,7 @@ func (s *server) Receive(c *actor.Context) {
 	case actor.Started:
 		initialCfg := configcluster.ConfigSnapshot{
 			Version: 1,
-			Data: configcluster.ClusterConfig{
-				DBPath: "./authblock.db",
-
-				KeycloakBaseURL:             "http://localhost:8080",
-				KeycloakRealm:               "cosmos",
-				KeycloakClientID:            "spaghetti-service",
-				KeycloakClientSecret:        "nA3XmI7wgHnxdXepKGgMkJz66tyUbviJ",
-				KeycloakWalletAttributeName: "",
-				KeycloakEnableWalletLookup:  true,
-
-				AttributesBaseURL: "http://localhost:8000",
-			},
+			Data:    s.runtimeConfig.Cluster,
 		}
 		initialCfg.Hash = initialCfg.ComputeHash()
 
@@ -152,7 +141,6 @@ func (s *server) Receive(c *actor.Context) {
 		if s.gossipListener != nil {
 			_ = s.gossipListener.Close()
 		}
-		break
 	case *connAdd:
 		slog.Info("[server]-> added new connection to my map", "addr", msg.conn.RemoteAddr(), "pid", msg.pid)
 		s.sessions[msg.pid] = msg.conn
@@ -169,7 +157,12 @@ func (s *server) acceptLoop(c *actor.Context) {
 	reply := make(chan configcluster.ConfigSnapshot, 1)
 	c.Send(s.configPID, &configactors.GetConfig{Reply: reply})
 	snapshot := <-reply
-	dynEval := initAttributesDynamicEvaluator(snapshot.Data.AttributesBaseURL)
+	evaluator := policy.AttributeEvaluator{
+		PolicyID:           s.runtimeConfig.PolicyID,
+		PolicyVersion:      s.runtimeConfig.PolicyVersion,
+		Operation:          "/cosmos.bank.v1beta1.MsgSend",
+		RequiredPermission: s.runtimeConfig.SendPermission,
+	}
 	for {
 		conn, err := s.ln.Accept()
 		if err != nil {
@@ -177,40 +170,11 @@ func (s *server) acceptLoop(c *actor.Context) {
 			break
 		}
 		sid := rand.Intn(math.MaxInt)
-		pid := c.SpawnChild(newSession(conn, dynEval), "session", actor.WithID(strconv.Itoa(sid)))
+		pid := c.SpawnChild(newSession(conn, snapshot.Data.DBPath, s.runtimeConfig.MaxAttributeAge, evaluator, slog.Default()), "session", actor.WithID(strconv.Itoa(sid)))
 		c.Send(c.PID(), &connAdd{
 			sid:  sid,
 			pid:  pid,
 			conn: conn,
 		})
 	}
-}
-
-func initCosmosDynamicEvaluator() (dynEval *policy.DynamicEvaluator) {
-	min := big.NewInt(30000)
-	lcd := "http://127.0.0.1:1317"
-	dynClient := policy.NewCosmosBalanceClient(lcd, "token", min, 250*time.Millisecond)
-
-	dynEval = &policy.DynamicEvaluator{
-		Client:   dynClient,
-		Timeout:  250 * time.Millisecond,
-		FailOpen: false,
-		Cache:    cache.NewTTLCache[policy.Decision](time.Minute),
-	}
-	return
-}
-
-func initAttributesDynamicEvaluator(baseURL string) (dynEval *policy.DynamicEvaluator) {
-	if baseURL == "" {
-		baseURL = "http://localhost:8000"
-	}
-	dynClient := policy.NewAttributesClient(baseURL, 0, 500*time.Millisecond, 250*time.Millisecond)
-
-	dynEval = &policy.DynamicEvaluator{
-		Client:   dynClient,
-		Timeout:  250 * time.Millisecond,
-		FailOpen: true,
-		Cache:    cache.NewTTLCache[policy.Decision](time.Minute),
-	}
-	return
 }

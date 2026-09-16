@@ -18,7 +18,6 @@ type ClusterConfig struct {
 	KeycloakBaseURL             string
 	KeycloakRealm               string
 	KeycloakClientID            string
-	KeycloakClientSecret        string
 	KeycloakWalletAttributeName string
 	KeycloakEnableWalletLookup  bool
 

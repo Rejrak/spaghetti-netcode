@@ -11,6 +11,9 @@ import (
 	"time"
 )
 
+// AttributesClient is a legacy backend benchmark client, not an authorization
+// policy implementation. It is intentionally outside the runtime PolicyEvaluator path.
+// Deprecated: do not use for authorization decisions.
 type AttributesClient struct {
 	BaseURL string
 
