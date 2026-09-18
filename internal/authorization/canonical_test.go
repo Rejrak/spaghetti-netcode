@@ -2,6 +2,7 @@ package authorization
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
 	"os"
@@ -28,6 +29,11 @@ type canonicalFixture struct {
 	} `json:"canonical_record_order"`
 	ExpectedSignBytesHex string `json:"expected_sign_bytes_hex"`
 	ExpectedBatchHashHex string `json:"expected_batch_hash_hex"`
+	Issuers              []struct {
+		IssuerID     string `json:"issuer_id"`
+		PublicKeyHex string `json:"public_key_hex"`
+		SignatureHex string `json:"signature_hex"`
+	} `json:"issuers"`
 }
 
 func loadCanonicalFixture(t *testing.T) (canonicalFixture, BatchSignDoc) {
@@ -53,6 +59,72 @@ func loadCanonicalFixture(t *testing.T) (canonicalFixture, BatchSignDoc) {
 		PolicyHash:    policyHash,
 		IssuerSetID:   fixture.IssuerSetID,
 		Records:       fixture.Records,
+	}
+}
+
+func TestEd25519GoldenSignatures(t *testing.T) {
+	fixture, _ := loadCanonicalFixture(t)
+	signBytes, err := hex.DecodeString(fixture.ExpectedSignBytesHex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batchHash, err := hex.DecodeString(fixture.ExpectedBatchHashHex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seeds := map[string]string{
+		"issuer-alpha": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+		"issuer-beta":  "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+	}
+	if len(fixture.Issuers) != len(seeds) {
+		t.Fatalf("fixture issuer count: got %d want %d", len(fixture.Issuers), len(seeds))
+	}
+
+	for _, issuer := range fixture.Issuers {
+		t.Run(issuer.IssuerID, func(t *testing.T) {
+			seedHex, ok := seeds[issuer.IssuerID]
+			if !ok {
+				t.Fatalf("unexpected issuer %q", issuer.IssuerID)
+			}
+			seed, err := hex.DecodeString(seedHex)
+			if err != nil || len(seed) != ed25519.SeedSize {
+				t.Fatalf("invalid TEST-ONLY seed: len=%d err=%v", len(seed), err)
+			}
+			privateKey := ed25519.NewKeyFromSeed(seed)
+			publicKey := privateKey.Public().(ed25519.PublicKey)
+			expectedPublicKey, err := hex.DecodeString(issuer.PublicKeyHex)
+			if err != nil {
+				t.Fatal(err)
+			}
+			expectedSignature, err := hex.DecodeString(issuer.SignatureHex)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(publicKey) != ed25519.PublicKeySize || len(expectedPublicKey) != ed25519.PublicKeySize {
+				t.Fatalf("public key length: derived=%d fixture=%d", len(publicKey), len(expectedPublicKey))
+			}
+			if len(expectedSignature) != ed25519.SignatureSize {
+				t.Fatalf("signature length: got %d want %d", len(expectedSignature), ed25519.SignatureSize)
+			}
+			if !bytes.Equal(publicKey, expectedPublicKey) {
+				t.Fatalf("public key mismatch: got %x want %s", publicKey, issuer.PublicKeyHex)
+			}
+			producedSignature := ed25519.Sign(privateKey, signBytes)
+			if len(producedSignature) != ed25519.SignatureSize || !bytes.Equal(producedSignature, expectedSignature) {
+				t.Fatalf("signature mismatch: got %x want %s", producedSignature, issuer.SignatureHex)
+			}
+			if !ed25519.Verify(publicKey, signBytes, expectedSignature) {
+				t.Fatal("fixture signature did not verify over canonical sign bytes")
+			}
+			tampered := append([]byte(nil), signBytes...)
+			tampered[0] ^= 1
+			if ed25519.Verify(publicKey, tampered, expectedSignature) {
+				t.Fatal("signature verified after sign-bytes tampering")
+			}
+			if ed25519.Verify(publicKey, batchHash, expectedSignature) {
+				t.Fatal("signature incorrectly verified over batch hash")
+			}
+		})
 	}
 }
 
