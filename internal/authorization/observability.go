@@ -54,6 +54,24 @@ func LogBatchBroadcast(ctx context.Context, logger *slog.Logger, batch Authoriza
 	)
 }
 
+func LogBatchCommitted(ctx context.Context, logger *slog.Logger, batch AuthorizationBatch, batchHash [sha256.Size]byte, txHash string, height int64, quorumWeight uint64) {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger.InfoContext(ctx, observability.EventBatchCommitted,
+		"component", "authorization_batch",
+		"batch_id", batch.SignDoc.BatchID,
+		"policy_id", batch.SignDoc.PolicyID,
+		"policy_version", batch.SignDoc.PolicyVersion,
+		"issuer_set_id", batch.SignDoc.IssuerSetID,
+		"record_count", len(batch.SignDoc.Records),
+		"batch_hash", hex.EncodeToString(batchHash[:]),
+		"tx_hash", txHash,
+		"height", height,
+		"quorum_weight", quorumWeight,
+	)
+}
+
 func logBatchEvent(ctx context.Context, logger *slog.Logger, event string, signDoc BatchSignDoc, recordCount, signatureCount int, batchHash [sha256.Size]byte) {
 	if logger == nil {
 		logger = slog.Default()
