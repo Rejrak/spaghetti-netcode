@@ -43,3 +43,10 @@ message AuthorizationBatch {
   AuthorizationBatchSignDoc sign_doc = 1;
   repeated BatchSignature signatures = 2;
 }
+
+message MsgBatchUpsertAuthorizations {
+  string submitter = 1;
+  AuthorizationBatch batch = 2;
+}
+
+message MsgBatchUpsertAuthorizationsResponse {}

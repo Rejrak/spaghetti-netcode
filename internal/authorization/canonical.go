@@ -7,8 +7,6 @@ import (
 	"sort"
 	"strings"
 
-	authzpb "spaghetti/internal/authorization/pb"
-
 	"google.golang.org/protobuf/proto"
 )
 
@@ -76,36 +74,7 @@ func CanonicalBatchSignBytes(input BatchSignDoc) ([]byte, [sha256.Size]byte, err
 	if err != nil {
 		return nil, [sha256.Size]byte{}, err
 	}
-	protoRecords := make([]*authzpb.AuthorizationRecord, len(canonical.Records))
-	for i, record := range canonical.Records {
-		protoRecords[i] = &authzpb.AuthorizationRecord{
-			AuthorizationId:  record.AuthorizationID,
-			Subject:          record.Subject,
-			MsgTypeUrl:       record.MsgTypeURL,
-			PolicyId:         record.PolicyID,
-			PolicyVersion:    record.PolicyVersion,
-			IssuerSetId:      record.IssuerSetID,
-			ValidFromHeight:  record.ValidFromHeight,
-			ValidUntilHeight: record.ValidUntilHeight,
-			Revoked:          record.Revoked,
-			BankSendConstraints: &authzpb.BankSendConstraints{
-				Denom:     record.BankSendConstraints.Denom,
-				Receiver:  record.BankSendConstraints.Receiver,
-				MaxAmount: record.BankSendConstraints.MaxAmount,
-			},
-		}
-	}
-
-	signDoc := &authzpb.AuthorizationBatchSignDoc{
-		Domain:        canonical.Domain,
-		ChainId:       canonical.ChainID,
-		BatchId:       canonical.BatchID,
-		PolicyId:      canonical.PolicyID,
-		PolicyVersion: canonical.PolicyVersion,
-		PolicyHash:    append([]byte(nil), canonical.PolicyHash...),
-		IssuerSetId:   canonical.IssuerSetID,
-		Records:       protoRecords,
-	}
+	signDoc := toProtoBatchSignDoc(canonical)
 	signBytes, err := (proto.MarshalOptions{Deterministic: true}).Marshal(signDoc)
 	if err != nil {
 		return nil, [sha256.Size]byte{}, fmt.Errorf("marshal canonical sign document: %w", err)

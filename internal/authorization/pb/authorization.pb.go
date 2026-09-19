@@ -401,6 +401,94 @@ func (x *AuthorizationBatch) GetSignatures() []*BatchSignature {
 	return nil
 }
 
+type MsgBatchUpsertAuthorizations struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Submitter     string                 `protobuf:"bytes,1,opt,name=submitter,proto3" json:"submitter,omitempty"`
+	Batch         *AuthorizationBatch    `protobuf:"bytes,2,opt,name=batch,proto3" json:"batch,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MsgBatchUpsertAuthorizations) Reset() {
+	*x = MsgBatchUpsertAuthorizations{}
+	mi := &file_authorization_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MsgBatchUpsertAuthorizations) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MsgBatchUpsertAuthorizations) ProtoMessage() {}
+
+func (x *MsgBatchUpsertAuthorizations) ProtoReflect() protoreflect.Message {
+	mi := &file_authorization_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MsgBatchUpsertAuthorizations.ProtoReflect.Descriptor instead.
+func (*MsgBatchUpsertAuthorizations) Descriptor() ([]byte, []int) {
+	return file_authorization_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *MsgBatchUpsertAuthorizations) GetSubmitter() string {
+	if x != nil {
+		return x.Submitter
+	}
+	return ""
+}
+
+func (x *MsgBatchUpsertAuthorizations) GetBatch() *AuthorizationBatch {
+	if x != nil {
+		return x.Batch
+	}
+	return nil
+}
+
+type MsgBatchUpsertAuthorizationsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MsgBatchUpsertAuthorizationsResponse) Reset() {
+	*x = MsgBatchUpsertAuthorizationsResponse{}
+	mi := &file_authorization_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MsgBatchUpsertAuthorizationsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MsgBatchUpsertAuthorizationsResponse) ProtoMessage() {}
+
+func (x *MsgBatchUpsertAuthorizationsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_authorization_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MsgBatchUpsertAuthorizationsResponse.ProtoReflect.Descriptor instead.
+func (*MsgBatchUpsertAuthorizationsResponse) Descriptor() ([]byte, []int) {
+	return file_authorization_proto_rawDescGZIP(), []int{6}
+}
+
 var File_authorization_proto protoreflect.FileDescriptor
 
 const file_authorization_proto_rawDesc = "" +
@@ -441,7 +529,11 @@ const file_authorization_proto_rawDesc = "" +
 	"\bsign_doc\x18\x01 \x01(\v2..alpha.authzattrs.v1.AuthorizationBatchSignDocR\asignDoc\x12C\n" +
 	"\n" +
 	"signatures\x18\x02 \x03(\v2#.alpha.authzattrs.v1.BatchSignatureR\n" +
-	"signaturesB%Z#spaghetti/internal/authorization/pbb\x06proto3"
+	"signatures\"{\n" +
+	"\x1cMsgBatchUpsertAuthorizations\x12\x1c\n" +
+	"\tsubmitter\x18\x01 \x01(\tR\tsubmitter\x12=\n" +
+	"\x05batch\x18\x02 \x01(\v2'.alpha.authzattrs.v1.AuthorizationBatchR\x05batch\"&\n" +
+	"$MsgBatchUpsertAuthorizationsResponseB%Z#spaghetti/internal/authorization/pbb\x06proto3"
 
 var (
 	file_authorization_proto_rawDescOnce sync.Once
@@ -455,24 +547,27 @@ func file_authorization_proto_rawDescGZIP() []byte {
 	return file_authorization_proto_rawDescData
 }
 
-var file_authorization_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_authorization_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_authorization_proto_goTypes = []any{
-	(*BankSendConstraints)(nil),       // 0: alpha.authzattrs.v1.BankSendConstraints
-	(*AuthorizationRecord)(nil),       // 1: alpha.authzattrs.v1.AuthorizationRecord
-	(*AuthorizationBatchSignDoc)(nil), // 2: alpha.authzattrs.v1.AuthorizationBatchSignDoc
-	(*BatchSignature)(nil),            // 3: alpha.authzattrs.v1.BatchSignature
-	(*AuthorizationBatch)(nil),        // 4: alpha.authzattrs.v1.AuthorizationBatch
+	(*BankSendConstraints)(nil),                  // 0: alpha.authzattrs.v1.BankSendConstraints
+	(*AuthorizationRecord)(nil),                  // 1: alpha.authzattrs.v1.AuthorizationRecord
+	(*AuthorizationBatchSignDoc)(nil),            // 2: alpha.authzattrs.v1.AuthorizationBatchSignDoc
+	(*BatchSignature)(nil),                       // 3: alpha.authzattrs.v1.BatchSignature
+	(*AuthorizationBatch)(nil),                   // 4: alpha.authzattrs.v1.AuthorizationBatch
+	(*MsgBatchUpsertAuthorizations)(nil),         // 5: alpha.authzattrs.v1.MsgBatchUpsertAuthorizations
+	(*MsgBatchUpsertAuthorizationsResponse)(nil), // 6: alpha.authzattrs.v1.MsgBatchUpsertAuthorizationsResponse
 }
 var file_authorization_proto_depIdxs = []int32{
 	0, // 0: alpha.authzattrs.v1.AuthorizationRecord.bank_send_constraints:type_name -> alpha.authzattrs.v1.BankSendConstraints
 	1, // 1: alpha.authzattrs.v1.AuthorizationBatchSignDoc.records:type_name -> alpha.authzattrs.v1.AuthorizationRecord
 	2, // 2: alpha.authzattrs.v1.AuthorizationBatch.sign_doc:type_name -> alpha.authzattrs.v1.AuthorizationBatchSignDoc
 	3, // 3: alpha.authzattrs.v1.AuthorizationBatch.signatures:type_name -> alpha.authzattrs.v1.BatchSignature
-	4, // [4:4] is the sub-list for method output_type
-	4, // [4:4] is the sub-list for method input_type
-	4, // [4:4] is the sub-list for extension type_name
-	4, // [4:4] is the sub-list for extension extendee
-	0, // [0:4] is the sub-list for field type_name
+	4, // 4: alpha.authzattrs.v1.MsgBatchUpsertAuthorizations.batch:type_name -> alpha.authzattrs.v1.AuthorizationBatch
+	5, // [5:5] is the sub-list for method output_type
+	5, // [5:5] is the sub-list for method input_type
+	5, // [5:5] is the sub-list for extension type_name
+	5, // [5:5] is the sub-list for extension extendee
+	0, // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_authorization_proto_init() }
@@ -486,7 +581,7 @@ func file_authorization_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_authorization_proto_rawDesc), len(file_authorization_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   5,
+			NumMessages:   7,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
