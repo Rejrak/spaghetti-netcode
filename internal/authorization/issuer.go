@@ -127,14 +127,24 @@ func (s *AuthorizationIssuer) Issue(ctx context.Context, request AuthorizationIs
 	if err != nil {
 		return AuthorizationIssueResult{}, fmt.Errorf("build authorization record: %w", err)
 	}
+	LogAuthorizationBuilt(ctx, s.logger, record)
 	signDoc, err := BuildBatchSignDoc(request.BatchContext, []AuthorizationRecord{record})
 	if err != nil {
 		return AuthorizationIssueResult{}, fmt.Errorf("build batch sign document: %w", err)
 	}
-	batch, batchHash, err := SignAuthorizationBatch(ctx, signDoc, s.signers)
+	_, batchHash, err := CanonicalBatchSignBytes(signDoc)
+	if err != nil {
+		return AuthorizationIssueResult{}, fmt.Errorf("hash authorization batch: %w", err)
+	}
+	LogBatchBuilt(ctx, s.logger, signDoc, batchHash)
+	batch, signedBatchHash, err := SignAuthorizationBatch(ctx, signDoc, s.signers)
 	if err != nil {
 		return AuthorizationIssueResult{}, fmt.Errorf("sign authorization batch: %w", err)
 	}
+	if signedBatchHash != batchHash {
+		return AuthorizationIssueResult{}, fmt.Errorf("canonical batch hash changed during signing")
+	}
+	LogBatchSigned(ctx, s.logger, batch, signedBatchHash)
 	broadcast, err := s.publisher.Publish(ctx, batch)
 	if err != nil {
 		return AuthorizationIssueResult{}, fmt.Errorf("publish authorization batch: %w", err)
@@ -145,7 +155,7 @@ func (s *AuthorizationIssuer) Issue(ctx context.Context, request AuthorizationIs
 	}
 	return AuthorizationIssueResult{
 		AuthorizationRecord: record,
-		BatchHash:           batchHash,
+		BatchHash:           signedBatchHash,
 		TxHash:              commit.TxHash,
 		Height:              commit.Height,
 	}, nil

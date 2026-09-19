@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"reflect"
@@ -98,7 +100,7 @@ type issuerFixture struct {
 
 func newIssuerFixture(t *testing.T) *issuerFixture {
 	t.Helper()
-	attributes := &user.Attributes{Perms: map[string]bool{"send": true}, Roles: []string{"operator"}}
+	attributes := &user.Attributes{Perms: map[string]bool{"ATTRIBUTE_SECRET": true}, Roles: []string{"ROLE_SECRET"}}
 	f := &issuerFixture{
 		source: &issuerAttributeSource{attributes: attributes},
 		evaluator: &issuerPolicyEvaluator{decision: policy.PolicyDecision{
@@ -176,10 +178,21 @@ func TestAuthorizationIssuerIssueSuccess(t *testing.T) {
 	if result.BatchHash != wantHash || result.TxHash != "ABC123" || result.Height != 88 {
 		t.Fatalf("unexpected issue result: %+v", result)
 	}
-	if !strings.Contains(f.logs.String(), `"msg":"policy_evaluated"`) ||
-		!strings.Contains(f.logs.String(), `"outcome":"allow"`) ||
-		strings.Contains(f.logs.String(), "operator") {
-		t.Fatalf("unexpected policy log: %s", f.logs.String())
+	entries := decodeIssuerLogEntries(t, f.logs.String())
+	wantEvents := []string{"policy_evaluated", "authorization_built", "batch_built", "batch_signed"}
+	if got := issuerEventNames(entries); !reflect.DeepEqual(got, wantEvents) {
+		t.Fatalf("event order = %v, want %v", got, wantEvents)
+	}
+	wantHashHex := hex.EncodeToString(result.BatchHash[:])
+	if entries[2]["batch_hash"] != wantHashHex || entries[3]["batch_hash"] != wantHashHex {
+		t.Fatalf("lifecycle batch hashes = %v/%v, want %q", entries[2]["batch_hash"], entries[3]["batch_hash"], wantHashHex)
+	}
+	logOutput := f.logs.String()
+	signatureHex := hex.EncodeToString(f.publisher.batch.Signatures[0].Signature)
+	if !strings.Contains(logOutput, `"outcome":"allow"`) ||
+		strings.Contains(logOutput, "ATTRIBUTE_SECRET") || strings.Contains(logOutput, "ROLE_SECRET") ||
+		strings.Contains(logOutput, signatureHex) || strings.Contains(logOutput, "PRIVATE_MATERIAL") {
+		t.Fatalf("sensitive or incomplete lifecycle log: %s", logOutput)
 	}
 	if !reflect.DeepEqual(f.request, before) {
 		t.Fatal("Issue mutated caller request")
@@ -195,20 +208,21 @@ func TestAuthorizationIssuerFailClosed(t *testing.T) {
 		wantPublish     int
 		wantConfirm     int
 		wantDenied      bool
+		wantEvents      []string
 	}{
 		{name: "attribute source error", mutate: func(f *issuerFixture) { f.source.err = errors.New("attributes unavailable") }, wantEvaluator: 0},
 		{name: "evaluator error", mutate: func(f *issuerFixture) { f.evaluator.err = errors.New("policy unavailable") }, wantEvaluator: 1},
 		{name: "policy deny", mutate: func(f *issuerFixture) {
 			f.evaluator.decision.Allow = false
 			f.evaluator.decision.ReasonCode = policy.ReasonPolicyMismatch
-		}, wantEvaluator: 1, wantDenied: true},
-		{name: "policy id mismatch", mutate: func(f *issuerFixture) { f.request.BatchContext.PolicyID = "other-policy" }, wantEvaluator: 1},
-		{name: "policy version mismatch", mutate: func(f *issuerFixture) { f.request.BatchContext.PolicyVersion = 8 }, wantEvaluator: 1},
-		{name: "malformed subject", mutate: func(f *issuerFixture) { f.request.Facts.Subject = "not-an-address" }, wantEvaluator: 1},
-		{name: "invalid max amount", mutate: func(f *issuerFixture) { f.request.AuthorizationContext.MaxAmount = "0" }, wantEvaluator: 1},
-		{name: "signer failure", mutate: func(f *issuerFixture) { f.signers[0].err = errors.New("signer unavailable") }, wantEvaluator: 1, wantSignerCalls: 1},
-		{name: "publisher failure", mutate: func(f *issuerFixture) { f.publisher.err = errors.New("broadcast failed") }, wantEvaluator: 1, wantSignerCalls: 2, wantPublish: 1},
-		{name: "confirmer failure", mutate: func(f *issuerFixture) { f.confirmer.err = errors.New("confirmation failed") }, wantEvaluator: 1, wantSignerCalls: 2, wantPublish: 1, wantConfirm: 1},
+		}, wantEvaluator: 1, wantDenied: true, wantEvents: []string{"policy_evaluated"}},
+		{name: "policy id mismatch", mutate: func(f *issuerFixture) { f.request.BatchContext.PolicyID = "other-policy" }, wantEvaluator: 1, wantEvents: []string{"policy_evaluated"}},
+		{name: "policy version mismatch", mutate: func(f *issuerFixture) { f.request.BatchContext.PolicyVersion = 8 }, wantEvaluator: 1, wantEvents: []string{"policy_evaluated"}},
+		{name: "malformed subject", mutate: func(f *issuerFixture) { f.request.Facts.Subject = "not-an-address" }, wantEvaluator: 1, wantEvents: []string{"policy_evaluated"}},
+		{name: "invalid max amount", mutate: func(f *issuerFixture) { f.request.AuthorizationContext.MaxAmount = "0" }, wantEvaluator: 1, wantEvents: []string{"policy_evaluated"}},
+		{name: "signer failure", mutate: func(f *issuerFixture) { f.signers[0].err = errors.New("signer unavailable") }, wantEvaluator: 1, wantSignerCalls: 1, wantEvents: []string{"policy_evaluated", "authorization_built", "batch_built"}},
+		{name: "publisher failure", mutate: func(f *issuerFixture) { f.publisher.err = errors.New("broadcast failed") }, wantEvaluator: 1, wantSignerCalls: 2, wantPublish: 1, wantEvents: []string{"policy_evaluated", "authorization_built", "batch_built", "batch_signed"}},
+		{name: "confirmer failure", mutate: func(f *issuerFixture) { f.confirmer.err = errors.New("confirmation failed") }, wantEvaluator: 1, wantSignerCalls: 2, wantPublish: 1, wantConfirm: 1, wantEvents: []string{"policy_evaluated", "authorization_built", "batch_built", "batch_signed"}},
 	}
 
 	for _, tt := range tests {
@@ -230,14 +244,41 @@ func TestAuthorizationIssuerFailClosed(t *testing.T) {
 			if errors.As(err, &denied) != tt.wantDenied {
 				t.Fatalf("PolicyDeniedError = %v, want %v (error %v)", errors.As(err, &denied), tt.wantDenied, err)
 			}
-			if tt.wantDenied {
-				logOutput := f.logs.String()
-				if !strings.Contains(logOutput, `"outcome":"deny"`) || strings.Contains(logOutput, "authorization_built") || strings.Contains(logOutput, "batch_") {
-					t.Fatalf("unexpected denial log: %s", logOutput)
-				}
+			if got := issuerEventNames(decodeIssuerLogEntries(t, f.logs.String())); !reflect.DeepEqual(got, tt.wantEvents) {
+				t.Fatalf("events = %v, want %v", got, tt.wantEvents)
+			}
+			if tt.wantDenied && !strings.Contains(f.logs.String(), `"outcome":"deny"`) {
+				t.Fatalf("missing denial outcome: %s", f.logs.String())
 			}
 		})
 	}
+}
+
+func decodeIssuerLogEntries(t *testing.T, output string) []map[string]any {
+	t.Helper()
+	var entries []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		if line == "" {
+			continue
+		}
+		entry := make(map[string]any)
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			t.Fatalf("decode log entry: %v", err)
+		}
+		entries = append(entries, entry)
+	}
+	return entries
+}
+
+func issuerEventNames(entries []map[string]any) []string {
+	if len(entries) == 0 {
+		return nil
+	}
+	events := make([]string, len(entries))
+	for i, entry := range entries {
+		events[i], _ = entry["msg"].(string)
+	}
+	return events
 }
 
 func TestNewAuthorizationIssuerRejectsMissingDependencies(t *testing.T) {
