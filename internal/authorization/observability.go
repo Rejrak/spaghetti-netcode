@@ -7,7 +7,26 @@ import (
 	"log/slog"
 
 	"spaghetti/internal/observability"
+	"spaghetti/internal/remote/policy"
 )
+
+func LogPolicyEvaluated(ctx context.Context, logger *slog.Logger, decision policy.PolicyDecision) {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	outcome := "deny"
+	if decision.Allow {
+		outcome = "allow"
+	}
+	logger.InfoContext(ctx, observability.EventPolicyEvaluated,
+		"component", "policy_engine",
+		"operation", "evaluate_authorization",
+		"outcome", outcome,
+		"reason_code", decision.ReasonCode,
+		"policy_id", decision.PolicyID,
+		"policy_version", decision.PolicyVersion,
+	)
+}
 
 // LogAuthorizationBuilt emits the Protocol V1.1 middleware event without
 // exposing the subject address itself.
