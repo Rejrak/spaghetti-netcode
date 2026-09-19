@@ -13,7 +13,6 @@ import (
 	"sync"
 	"time"
 
-	"log"
 	"spaghetti/internal/user"
 )
 
@@ -157,7 +156,6 @@ func (kc *KeycloakClient) collectRoleAttributes(ctx context.Context, token, user
 
 		for k, vs := range def.Attributes {
 			// supply.* -> permesso di dominio
-			log.Default().Printf("[Keycloak] --> role %s attribute %s = %v", def.Name, k, vs)
 			if strings.HasPrefix(k, "supply.") {
 				if asBool(vs) {
 					perms[k] = true
@@ -419,9 +417,6 @@ func (kc *KeycloakClient) findUserByExactUsername(ctx context.Context, token, us
 	var users []kcUser
 	if err := json.NewDecoder(resp.Body).Decode(&users); err != nil {
 		return nil, err
-	}
-	for _, u := range users {
-		log.Default().Printf(" - user: %s attrs=%v", u.Username, u.Attributes)
 	}
 	if len(users) == 1 {
 		return &users[0], nil
