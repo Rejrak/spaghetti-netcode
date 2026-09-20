@@ -8,7 +8,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -22,17 +21,8 @@ import (
 	"spaghetti/internal/remote/policy"
 )
 
-const (
-	integrationIssuerSetID = uint64(9)
-	integrationDenom       = "token"
-	integrationMaxAmount   = "5000"
-)
-
 type options struct {
-	batchID         uint64
 	subject         string
-	receiver        string
-	amount          string
 	submitter       string
 	alphad          string
 	chainID         string
@@ -54,7 +44,6 @@ type environment struct {
 	walletAttribute      string
 	policyID             string
 	policyVersion        string
-	policyVersionNumber  uint64
 	permission           string
 }
 
@@ -64,17 +53,12 @@ type commandConfig struct {
 }
 
 type commandOutput struct {
-	AuthorizationID string `json:"authorization_id"`
-	BatchID         uint64 `json:"batch_id"`
-	BatchHash       string `json:"batch_hash"`
-	TxHash          string `json:"tx_hash"`
-	Height          int64  `json:"height"`
-	Subject         string `json:"subject"`
-	Receiver        string `json:"receiver"`
-	Denom           string `json:"denom"`
-	MaxAmount       string `json:"max_amount"`
-	PolicyID        string `json:"policy_id"`
-	PolicyVersion   uint64 `json:"policy_version"`
+	Status          authorization.AuthorizationReconcileStatus `json:"status"`
+	AuthorizationID string                                     `json:"authorization_id,omitempty"`
+	BatchID         uint64                                     `json:"batch_id,omitempty"`
+	BatchHash       string                                     `json:"batch_hash,omitempty"`
+	TxHash          string                                     `json:"tx_hash,omitempty"`
+	Height          int64                                      `json:"height,omitempty"`
 }
 
 func main() {
@@ -116,52 +100,39 @@ func run(ctx context.Context, args []string, stdout io.Writer, getenv func(strin
 		return err
 	}
 
-	keycloak := remote.NewKeycloakClient(remote.KeycloakConfig{
-		BaseURL:                     config.environment.keycloakBaseURL,
-		Realm:                       config.environment.keycloakRealm,
-		ClientID:                    config.environment.keycloakClientID,
-		ClientSecret:                config.environment.keycloakClientSecret,
-		EnableWalletAttributeLookup: config.environment.enableWalletLookup,
-		WalletAttributeName:         config.environment.walletAttribute,
-	})
+	keycloak := remote.NewKeycloakClient(config.keycloakConfig())
+	reader, err := authorization.NewAlphadAuthorizationStateReader(config.stateReaderConfig(), nil)
+	if err != nil {
+		return err
+	}
 	publisher, err := authorization.NewAlphadBatchPublisher(authorization.AlphadPublisherConfig{
-		BinaryPath:     config.options.alphad,
-		From:           config.options.submitter,
-		ChainID:        config.options.chainID,
-		KeyringBackend: config.options.keyringBackend,
-		Home:           config.options.home,
-		Node:           config.options.node,
+		BinaryPath: config.options.alphad, From: config.options.submitter,
+		ChainID: config.options.chainID, KeyringBackend: config.options.keyringBackend,
+		Home: config.options.home, Node: config.options.node,
 	}, nil, nil)
 	if err != nil {
 		return err
 	}
 	confirmer, err := authorization.NewAlphadBatchCommitConfirmer(authorization.AlphadCommitConfig{
-		BinaryPath:   config.options.alphad,
-		Submitter:    config.options.submitter,
-		Home:         config.options.home,
-		Node:         config.options.node,
-		MaxAttempts:  config.options.maxAttempts,
-		PollInterval: config.options.pollInterval,
+		BinaryPath: config.options.alphad, Submitter: config.options.submitter,
+		Home: config.options.home, Node: config.options.node,
+		MaxAttempts: config.options.maxAttempts, PollInterval: config.options.pollInterval,
 	}, nil, nil)
 	if err != nil {
 		return err
 	}
-	issuer, err := authorization.NewAuthorizationIssuer(
-		keycloak,
-		config.policyEvaluator(),
-		[]authorization.BatchSigner{alphaSigner, betaSigner},
-		publisher,
-		confirmer,
-		nil,
+	reconciler, err := authorization.NewAuthorizationRevocationReconciler(
+		keycloak, config.policyEvaluator(), reader,
+		[]authorization.BatchSigner{alphaSigner, betaSigner}, publisher, confirmer, nil,
 	)
 	if err != nil {
 		return err
 	}
-	result, err := issuer.Issue(ctx, config.issueRequest())
+	result, err := reconciler.Reconcile(ctx, config.reconcileRequest())
 	if err != nil {
 		return err
 	}
-	return json.NewEncoder(stdout).Encode(config.output(result))
+	return json.NewEncoder(stdout).Encode(output(result))
 }
 
 func loadCommandConfig(args []string, getenv func(string) string) (commandConfig, error) {
@@ -178,12 +149,9 @@ func loadCommandConfig(args []string, getenv func(string) string) (commandConfig
 
 func parseOptions(args []string) (options, error) {
 	var parsed options
-	flags := flag.NewFlagSet("authz-keycloak-demo", flag.ContinueOnError)
+	flags := flag.NewFlagSet("authz-reconcile-demo", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	flags.Uint64Var(&parsed.batchID, "batch-id", 0, "positive authorization batch ID")
 	flags.StringVar(&parsed.subject, "subject", "", "authorized Cosmos account")
-	flags.StringVar(&parsed.receiver, "receiver", "", "allowed Cosmos receiver")
-	flags.StringVar(&parsed.amount, "amount", "", "requested token amount")
 	flags.StringVar(&parsed.submitter, "submitter", "", "Cosmos transaction broadcaster")
 	flags.StringVar(&parsed.alphad, "alphad", "", "absolute alphad binary path")
 	flags.StringVar(&parsed.chainID, "chain-id", "", "Alpha chain ID")
@@ -201,18 +169,14 @@ func parseOptions(args []string) (options, error) {
 		return options{}, fmt.Errorf("unexpected positional arguments")
 	}
 	required := map[string]string{
-		"subject": parsed.subject, "receiver": parsed.receiver, "amount": parsed.amount,
-		"submitter": parsed.submitter, "alphad": parsed.alphad, "chain-id": parsed.chainID,
-		"keyring-backend": parsed.keyringBackend, "issuer-alpha-seed-file": parsed.issuerAlphaSeed,
-		"issuer-beta-seed-file": parsed.issuerBetaSeed,
+		"subject": parsed.subject, "submitter": parsed.submitter, "alphad": parsed.alphad,
+		"chain-id": parsed.chainID, "keyring-backend": parsed.keyringBackend,
+		"issuer-alpha-seed-file": parsed.issuerAlphaSeed, "issuer-beta-seed-file": parsed.issuerBetaSeed,
 	}
 	for name, value := range required {
 		if strings.TrimSpace(value) == "" {
 			return options{}, fmt.Errorf("--%s is required", name)
 		}
-	}
-	if parsed.batchID == 0 {
-		return options{}, fmt.Errorf("--batch-id must be positive")
 	}
 	if !filepath.IsAbs(parsed.alphad) {
 		return options{}, fmt.Errorf("--alphad must be an absolute path")
@@ -260,8 +224,8 @@ func loadEnvironment(getenv func(string) string) (environment, error) {
 	if strings.ContainsAny(env.policyID+env.permission, "|\r\n") {
 		return environment{}, fmt.Errorf("policy identity and permission must not contain descriptor delimiters")
 	}
-	env.policyVersionNumber, err = strconv.ParseUint(env.policyVersion, 10, 64)
-	if err != nil || env.policyVersionNumber == 0 || strconv.FormatUint(env.policyVersionNumber, 10) != env.policyVersion {
+	version, err := strconv.ParseUint(env.policyVersion, 10, 64)
+	if err != nil || version == 0 || strconv.FormatUint(version, 10) != env.policyVersion {
 		return environment{}, fmt.Errorf("SPAGHETTI_POLICY_VERSION must be a canonical positive uint64")
 	}
 	env.walletAttribute = strings.TrimSpace(getenv("SPAGHETTI_KEYCLOAK_WALLET_ATTRIBUTE"))
@@ -274,48 +238,44 @@ func loadEnvironment(getenv func(string) string) (environment, error) {
 	return env, nil
 }
 
+func (c commandConfig) keycloakConfig() remote.KeycloakConfig {
+	return remote.KeycloakConfig{
+		BaseURL: c.environment.keycloakBaseURL, Realm: c.environment.keycloakRealm,
+		ClientID: c.environment.keycloakClientID, ClientSecret: c.environment.keycloakClientSecret,
+		EnableWalletAttributeLookup: c.environment.enableWalletLookup,
+		WalletAttributeName:         c.environment.walletAttribute,
+	}
+}
+
 func (c commandConfig) policyEvaluator() policy.AttributeEvaluator {
 	return policy.AttributeEvaluator{
-		PolicyID:           c.environment.policyID,
-		PolicyVersion:      c.environment.policyVersion,
-		Operation:          authorization.MsgSendTypeURL,
-		RequiredPermission: c.environment.permission,
+		PolicyID: c.environment.policyID, PolicyVersion: c.environment.policyVersion,
+		Operation: authorization.MsgSendTypeURL, RequiredPermission: c.environment.permission,
 	}
 }
 
-func (c commandConfig) issueRequest() authorization.AuthorizationIssueRequest {
+func (c commandConfig) stateReaderConfig() authorization.AlphadAuthorizationStateReaderConfig {
+	return authorization.AlphadAuthorizationStateReaderConfig{
+		BinaryPath: c.options.alphad, Home: c.options.home, Node: c.options.node,
+	}
+}
+
+func (c commandConfig) reconcileRequest() authorization.AuthorizationReconcileRequest {
 	policyHash := authorization.KeycloakPolicyHash(c.environment.policyID, c.environment.policyVersion, c.environment.permission)
-	return authorization.AuthorizationIssueRequest{
-		Facts: authorization.NormalizedMsgSendFacts{
-			Subject: c.options.subject, MsgTypeURL: authorization.MsgSendTypeURL,
-			Receiver: c.options.receiver, Denom: integrationDenom, Amount: c.options.amount,
-		},
-		AuthorizationContext: authorization.TrustedAuthorizationContext{
-			AuthorizationID: fmt.Sprintf("keycloak-bank-send-%d", c.options.batchID),
-			IssuerSetID:     integrationIssuerSetID, ValidFromHeight: 1, ValidUntilHeight: math.MaxInt64,
-			AllowedDenom: integrationDenom, AllowedReceiver: c.options.receiver, MaxAmount: integrationMaxAmount,
-		},
-		BatchContext: authorization.TrustedBatchContext{
-			ChainID: c.options.chainID, BatchID: c.options.batchID,
-			PolicyID: c.environment.policyID, PolicyVersion: c.environment.policyVersionNumber,
-			PolicyHash: policyHash[:], IssuerSetID: integrationIssuerSetID,
-		},
+	return authorization.AuthorizationReconcileRequest{
+		Subject: c.options.subject, MsgTypeURL: authorization.MsgSendTypeURL,
+		ChainID: c.options.chainID, PolicyHash: policyHash[:],
 	}
 }
 
-func (c commandConfig) output(result authorization.AuthorizationIssueResult) commandOutput {
-	record := result.AuthorizationRecord
-	return commandOutput{
-		AuthorizationID: record.AuthorizationID,
-		BatchID:         c.options.batchID,
-		BatchHash:       hex.EncodeToString(result.BatchHash[:]),
-		TxHash:          result.TxHash,
-		Height:          result.Height,
-		Subject:         record.Subject,
-		Receiver:        record.BankSendConstraints.Receiver,
-		Denom:           record.BankSendConstraints.Denom,
-		MaxAmount:       record.BankSendConstraints.MaxAmount,
-		PolicyID:        record.PolicyID,
-		PolicyVersion:   record.PolicyVersion,
+func output(result authorization.AuthorizationReconcileResult) commandOutput {
+	out := commandOutput{Status: result.Status}
+	if result.Status == authorization.ReconcileRevoked {
+		out.AuthorizationID = result.AuthorizationID
+		out.BatchID = result.BatchID
+		out.BatchHash = hex.EncodeToString(result.BatchHash[:])
+		out.TxHash = result.TxHash
+		out.Height = result.Height
 	}
+	return out
 }

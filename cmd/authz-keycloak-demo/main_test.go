@@ -105,7 +105,7 @@ func TestPolicyConfigurationAndTrustedProfile(t *testing.T) {
 	if request.BatchContext.PolicyID != "policy-bank-send" || request.BatchContext.PolicyVersion != 7 {
 		t.Fatalf("trusted policy = %q/%d", request.BatchContext.PolicyID, request.BatchContext.PolicyVersion)
 	}
-	wantPolicyHash := configuredPolicyHash("policy-bank-send", "7", "supply.send")
+	wantPolicyHash := authorization.KeycloakPolicyHash("policy-bank-send", "7", "supply.send")
 	if !reflect.DeepEqual(request.BatchContext.PolicyHash, wantPolicyHash[:]) {
 		t.Fatalf("trusted policy hash = %x, want %x", request.BatchContext.PolicyHash, wantPolicyHash)
 	}
@@ -153,16 +153,13 @@ func TestConfiguredPolicyHash(t *testing.T) {
 		"|permission=supply.send" +
 		"|denom=token" +
 		"|max_amount=5000"
-	if got := configuredPolicyDescriptor("policy-bank-send", "7", "supply.send"); got != wantDescriptor {
-		t.Fatalf("descriptor = %q, want %q", got, wantDescriptor)
-	}
 	wantHash := sha256.Sum256([]byte(wantDescriptor))
-	first := configuredPolicyHash("policy-bank-send", "7", "supply.send")
-	second := configuredPolicyHash("policy-bank-send", "7", "supply.send")
+	first := authorization.KeycloakPolicyHash("policy-bank-send", "7", "supply.send")
+	second := authorization.KeycloakPolicyHash("policy-bank-send", "7", "supply.send")
 	if first != wantHash || second != first {
 		t.Fatalf("hash is not deterministic: %x/%x want %x", first, second, wantHash)
 	}
-	if changed := configuredPolicyHash("policy-bank-send-v2", "7", "supply.send"); changed == first {
+	if changed := authorization.KeycloakPolicyHash("policy-bank-send-v2", "7", "supply.send"); changed == first {
 		t.Fatal("policy identity change did not change policy hash")
 	}
 }
