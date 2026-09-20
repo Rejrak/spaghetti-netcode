@@ -1,0 +1,47 @@
+{
+  "realm": "alpha",
+  "enabled": true,
+  "roles": {
+    "realm": [
+      {
+        "name": "authz-bank-send",
+        "description": "Local E2E role for direct bank-send authorization",
+        "attributes": {
+          "supply.transaction.send": [
+            "true"
+          ]
+        }
+      }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "authz-middleware",
+      "name": "Authorization middleware (DEVELOPMENT ONLY)",
+      "description": "Local E2E client and secret; never reuse outside this disposable environment",
+      "enabled": true,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "local-authz-middleware-secret-do-not-reuse",
+      "serviceAccountsEnabled": true,
+      "publicClient": false,
+      "protocol": "openid-connect",
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false
+    }
+  ],
+  "users": [
+    {
+      "username": "service-account-authz-middleware",
+      "enabled": true,
+      "serviceAccountClientId": "authz-middleware",
+      "clientRoles": {
+        "realm-management": [
+          "query-users",
+          "view-realm",
+          "view-users"
+        ]
+      }
+    }
+  ]
+}

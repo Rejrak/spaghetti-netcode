@@ -1,0 +1,11 @@
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.7.4
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: local-admin-only
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./realm-alpha.json:/opt/keycloak/data/import/realm-alpha.json:ro
