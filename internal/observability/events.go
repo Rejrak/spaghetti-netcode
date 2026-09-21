@@ -10,4 +10,6 @@ const (
 	EventBatchCommitted            = "batch_committed"
 	EventReconciliationCycle       = "reconciliation_cycle"
 	EventReconciliationCycleFailed = "reconciliation_cycle_failed"
+	EventAuthzControlPlaneStarted  = "authz_control_plane_started"
+	EventAuthzControlPlaneStopped  = "authz_control_plane_stopped"
 )
