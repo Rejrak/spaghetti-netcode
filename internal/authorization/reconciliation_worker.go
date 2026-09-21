@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"spaghetti/internal/observability"
-	"spaghetti/internal/user"
 )
 
 type ManagedSubjectStore interface {
@@ -23,15 +22,15 @@ type SubjectDiscoverer interface {
 	ListSubjects(context.Context) ([]string, error)
 }
 
-type allUsersSource interface {
-	FetchAllUsers(context.Context) ([]*user.User, error)
+type authorizationSubjectSource interface {
+	FetchAuthorizationSubjectCandidates(context.Context) ([]string, error)
 }
 
 type KeycloakSubjectDiscoverer struct {
-	source allUsersSource
+	source authorizationSubjectSource
 }
 
-func NewKeycloakSubjectDiscoverer(source allUsersSource) (*KeycloakSubjectDiscoverer, error) {
+func NewKeycloakSubjectDiscoverer(source authorizationSubjectSource) (*KeycloakSubjectDiscoverer, error) {
 	if isNilDependency(source) {
 		return nil, fmt.Errorf("nil Keycloak user source")
 	}
@@ -42,16 +41,9 @@ func (d *KeycloakSubjectDiscoverer) ListSubjects(ctx context.Context) ([]string,
 	if ctx == nil {
 		return nil, fmt.Errorf("nil subject discovery context")
 	}
-	users, err := d.source.FetchAllUsers(ctx)
+	subjects, err := d.source.FetchAuthorizationSubjectCandidates(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("fetch Keycloak users: %w", err)
-	}
-	subjects := make([]string, 0, len(users))
-	for _, candidate := range users {
-		if candidate == nil {
-			return nil, fmt.Errorf("Keycloak returned nil user")
-		}
-		subjects = append(subjects, candidate.Address)
 	}
 	return canonicalSubjects(subjects)
 }

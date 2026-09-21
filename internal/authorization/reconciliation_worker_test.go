@@ -9,8 +9,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-
-	"spaghetti/internal/user"
 )
 
 const (
@@ -19,20 +17,18 @@ const (
 )
 
 type workerUserSource struct {
-	users []*user.User
-	err   error
-	calls int
+	subjects []string
+	err      error
+	calls    int
 }
 
-func (s *workerUserSource) FetchAllUsers(context.Context) ([]*user.User, error) {
+func (s *workerUserSource) FetchAuthorizationSubjectCandidates(context.Context) ([]string, error) {
 	s.calls++
-	return s.users, s.err
+	return append([]string(nil), s.subjects...), s.err
 }
 
 func TestKeycloakSubjectDiscoverer(t *testing.T) {
-	source := &workerUserSource{users: []*user.User{
-		{Address: testSubject}, {Address: testReceiver}, {Address: testSubject},
-	}}
+	source := &workerUserSource{subjects: []string{testSubject, testReceiver, testSubject}}
 	discoverer, err := NewKeycloakSubjectDiscoverer(source)
 	if err != nil {
 		t.Fatal(err)
@@ -45,7 +41,7 @@ func TestKeycloakSubjectDiscoverer(t *testing.T) {
 		t.Fatalf("subjects = %v, want %v", subjects, want)
 	}
 
-	source.users = []*user.User{{Address: "INVALID"}}
+	source.subjects = []string{"cosmos-malformed"}
 	if _, err := discoverer.ListSubjects(context.Background()); err == nil {
 		t.Fatal("malformed Keycloak address accepted")
 	}

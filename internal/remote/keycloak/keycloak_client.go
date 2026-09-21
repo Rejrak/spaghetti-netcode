@@ -308,6 +308,50 @@ func (kc *KeycloakClient) FetchAllUsers(ctx context.Context) ([]*user.User, erro
 	return out, nil
 }
 
+// FetchAuthorizationSubjectCandidates returns only principals that explicitly
+// look like authorization subjects. Canonical validation remains the caller's
+// responsibility so malformed wallet identities fail closed.
+func (kc *KeycloakClient) FetchAuthorizationSubjectCandidates(ctx context.Context) ([]string, error) {
+	tok, err := kc.ensureToken(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("token: %w", err)
+	}
+
+	start, max := 0, 100
+	var subjects []string
+	for {
+		users, err := kc.listUsers(ctx, tok, start, max)
+		if err != nil {
+			return nil, err
+		}
+		if len(users) == 0 {
+			break
+		}
+		for _, candidate := range users {
+			if subject, ok := kc.authorizationSubjectCandidate(candidate); ok {
+				subjects = append(subjects, subject)
+			}
+		}
+		start += len(users)
+		if len(users) < max {
+			break
+		}
+	}
+	return subjects, nil
+}
+
+func (kc *KeycloakClient) authorizationSubjectCandidate(candidate kcUser) (string, bool) {
+	if kc.cfg.EnableWalletAttributeLookup {
+		wallet := first(candidate.Attributes[kc.cfg.WalletAttributeName])
+		return wallet, strings.TrimSpace(wallet) != ""
+	}
+	username := strings.TrimSpace(candidate.Username)
+	if strings.HasPrefix(strings.ToLower(username), "cosmos") {
+		return candidate.Username, true
+	}
+	return "", false
+}
+
 // ------------------ modelli minimal KC ------------------
 
 type kcUser struct {
