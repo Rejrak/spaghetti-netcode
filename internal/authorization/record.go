@@ -159,3 +159,9 @@ func validateAccountAddress(address string) error {
 	}
 	return nil
 }
+
+// ValidateAccountAddress exposes the canonical account-address boundary to
+// control-plane persistence and discovery adapters.
+func ValidateAccountAddress(address string) error {
+	return validateAccountAddress(address)
+}

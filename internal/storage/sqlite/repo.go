@@ -4,10 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"time"
 
 	_ "modernc.org/sqlite" // driver pure Go
 
+	"spaghetti/internal/authorization"
 	"spaghetti/internal/user"
 )
 
@@ -72,6 +74,41 @@ VALUES(?, ?, ?)
 ON CONFLICT(address) DO UPDATE SET session=excluded.session
 `, address, session, now)
 	return err
+}
+
+// EnsureManagedSubject registers an authorization control-plane subject
+// without changing synchronized attributes, session, roles, permissions, or
+// freshness metadata on an existing user.
+func (r *Repo) EnsureManagedSubject(ctx context.Context, subject string) error {
+	if err := authorization.ValidateAccountAddress(subject); err != nil {
+		return fmt.Errorf("invalid managed subject: %w", err)
+	}
+	_, err := r.db.ExecContext(ctx, `
+INSERT INTO users(address)
+VALUES(?)
+ON CONFLICT(address) DO NOTHING
+`, subject)
+	return err
+}
+
+func (r *Repo) ListManagedSubjects(ctx context.Context) ([]string, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT address FROM users ORDER BY address ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var subjects []string
+	for rows.Next() {
+		var subject string
+		if err := rows.Scan(&subject); err != nil {
+			return nil, err
+		}
+		if err := authorization.ValidateAccountAddress(subject); err != nil {
+			return nil, fmt.Errorf("invalid persisted managed subject %q: %w", subject, err)
+		}
+		subjects = append(subjects, subject)
+	}
+	return subjects, rows.Err()
 }
 
 func (r *Repo) UpsertAttrs(ctx context.Context, address string, attrs *user.Attributes) error {
