@@ -97,8 +97,8 @@ func BuildCertificateSignDocV2(intent AuthorizationIntentV2, trusted TrustedCert
 }
 
 func CanonicalizeCertificateSignDocV2(input AuthorizationCertificateSignDocV2) (AuthorizationCertificateSignDocV2, error) {
-	if input.Domain != CertificateDomainV2 || strings.TrimSpace(input.Intent.ChainID) == "" ||
-		strings.TrimSpace(input.PolicyID) == "" || input.PolicyVersion == 0 ||
+	if input.Domain != CertificateDomainV2 || input.Intent.ChainID == "" ||
+		input.PolicyID == "" || input.PolicyVersion == 0 ||
 		len(input.PolicyHash) != sha256.Size || input.IssuerSetID == 0 ||
 		input.ValidFromHeight <= 0 || input.ValidUntilHeight < input.ValidFromHeight {
 		return AuthorizationCertificateSignDocV2{}, fmt.Errorf("invalid V2 certificate metadata")
@@ -110,8 +110,8 @@ func CanonicalizeCertificateSignDocV2(input AuthorizationCertificateSignDocV2) (
 	if err := validateAccountAddress(intent.Receiver); err != nil {
 		return AuthorizationCertificateSignDocV2{}, fmt.Errorf("invalid receiver: %w", err)
 	}
-	if !denomPattern.MatchString(intent.Denom) || !validDecimalV2(intent.Amount, true) || intent.GasLimit == 0 {
-		return AuthorizationCertificateSignDocV2{}, fmt.Errorf("invalid V2 transfer or gas")
+	if !denomPattern.MatchString(intent.Denom) || !validDecimalV2(intent.Amount, true) {
+		return AuthorizationCertificateSignDocV2{}, fmt.Errorf("invalid V2 transfer")
 	}
 	if len(intent.FeeAmount) > maxFeeCoinsV2 {
 		return AuthorizationCertificateSignDocV2{}, fmt.Errorf("too many fee coins")

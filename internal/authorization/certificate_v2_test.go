@@ -167,7 +167,6 @@ func TestV2InvalidSignDocuments(t *testing.T) {
 		{"receiver", func(i *AuthorizationIntentV2, _ *TrustedCertificateContextV2) { i.Receiver = "bad" }},
 		{"denom", func(i *AuthorizationIntentV2, _ *TrustedCertificateContextV2) { i.Denom = "x" }},
 		{"amount", func(i *AuthorizationIntentV2, _ *TrustedCertificateContextV2) { i.Amount = "01" }},
-		{"zero gas", func(i *AuthorizationIntentV2, _ *TrustedCertificateContextV2) { i.GasLimit = 0 }},
 		{"fee amount", func(i *AuthorizationIntentV2, _ *TrustedCertificateContextV2) { i.FeeAmount[0].Amount = "00" }},
 		{"fee negative", func(i *AuthorizationIntentV2, _ *TrustedCertificateContextV2) { i.FeeAmount[0].Amount = "-1" }},
 		{"duplicate fee", func(i *AuthorizationIntentV2, _ *TrustedCertificateContextV2) {
@@ -191,6 +190,32 @@ func TestV2InvalidSignDocuments(t *testing.T) {
 			tc.change(&intent, &trusted)
 			if _, err := BuildCertificateSignDocV2(intent, trusted); err == nil {
 				t.Fatal("accepted invalid input")
+			}
+		})
+	}
+}
+
+func TestV2CanonicalSignDocParityWithAlpha(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*AuthorizationIntentV2, *TrustedCertificateContextV2)
+	}{
+		{"zero gas", func(i *AuthorizationIntentV2, _ *TrustedCertificateContextV2) { i.GasLimit = 0 }},
+		{"nonempty whitespace chain ID", func(_ *AuthorizationIntentV2, c *TrustedCertificateContextV2) { c.ChainID = " " }},
+		{"nonempty whitespace policy ID", func(_ *AuthorizationIntentV2, c *TrustedCertificateContextV2) { c.PolicyID = " " }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			intent, trusted := goldenInputsV2()
+			tc.change(&intent, &trusted)
+			doc, err := BuildCertificateSignDocV2(intent, trusted)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if doc.Intent.GasLimit != intent.GasLimit || doc.Intent.ChainID != trusted.ChainID || doc.PolicyID != trusted.PolicyID {
+				t.Fatal("canonical sign doc changed a defined field")
+			}
+			if _, _, err := CanonicalCertificateSignBytesV2(doc); err != nil {
+				t.Fatal(err)
 			}
 		})
 	}
