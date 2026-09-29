@@ -6,7 +6,9 @@ import (
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"strings"
 	"testing"
@@ -110,6 +112,25 @@ func flowFixtureV2(t *testing.T) (*V2OneTxService, *fakeFlowIssuerV2, *fakeFlowB
 	return service, issuer, broadcaster, confirmer, buildCalls
 }
 
+func decodeV2EventLogs(t *testing.T, data []byte) map[string]map[string]any {
+	t.Helper()
+	events := make(map[string]map[string]any)
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	for {
+		var event map[string]any
+		if err := decoder.Decode(&event); err == io.EOF {
+			return events
+		} else if err != nil {
+			t.Fatal(err)
+		}
+		name, _ := event["msg"].(string)
+		if _, duplicate := events[name]; duplicate {
+			t.Fatalf("duplicate V2 event %q", name)
+		}
+		events[name] = event
+	}
+}
+
 func TestV2OneTxFlowSuccess(t *testing.T) {
 	service, issuer, broadcaster, confirmer, builds := flowFixtureV2(t)
 	var logs bytes.Buffer
@@ -142,6 +163,27 @@ func TestV2OneTxFlowSuccess(t *testing.T) {
 	for _, event := range []string{"v2_tx_built", "v2_tx_broadcast", "v2_tx_confirmed"} {
 		if bytes.Count(logs.Bytes(), []byte(event)) != 1 {
 			t.Fatalf("expected one %s event", event)
+		}
+	}
+	events := decodeV2EventLogs(t, logs.Bytes())
+	for _, name := range []string{"v2_tx_built", "v2_tx_broadcast", "v2_tx_confirmed"} {
+		event := events[name]
+		if event["certificate_digest"] != hex.EncodeToString(result.CertificateDigest[:]) ||
+			event["tx_hash"] != result.TxHash || event["subject"] != result.Subject ||
+			event["sequence"] != float64(result.Sequence) || event["policy_id"] != issuer.result.Certificate.SignDoc.PolicyID ||
+			event["policy_version"] != float64(issuer.result.Certificate.SignDoc.PolicyVersion) ||
+			event["issuer_set_id"] != float64(issuer.result.Certificate.SignDoc.IssuerSetID) ||
+			event["signature_count"] != float64(len(issuer.result.Certificate.Signatures)) {
+			t.Fatalf("incomplete %s correlation fields: %v", name, event)
+		}
+	}
+	if events["v2_tx_confirmed"]["height"] != float64(result.Height) || events["v2_tx_confirmed"]["code"] != float64(0) {
+		t.Fatal("confirmation height/code missing")
+	}
+	for _, forbidden := range []string{hex.EncodeToString(issuer.result.Certificate.Signatures[0].Signature),
+		hex.EncodeToString(issuer.result.CertificateBytes), "abandon abandon abandon"} {
+		if bytes.Contains(logs.Bytes(), []byte(forbidden)) {
+			t.Fatal("V2 transaction log exposed key or certificate material")
 		}
 	}
 }
@@ -213,6 +255,9 @@ func TestV2OneTxFlowFailureBoundaries(t *testing.T) {
 			c.result = V2InclusionResult{Code: 9, Height: 51}
 			c.err = errors.New("included with code=9")
 		}, 1, 1, 1, "code=9"},
+		{"confirmation query failure", func(_ *V2OneTxService, _ *fakeFlowIssuerV2, _ *fakeFlowBroadcasterV2, c *fakeFlowConfirmerV2) {
+			c.err = errors.New("RPC unavailable")
+		}, 1, 1, 1, "RPC unavailable"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			service, issuer, broadcaster, confirmer, builds := flowFixtureV2(t)
@@ -229,6 +274,18 @@ func TestV2OneTxFlowFailureBoundaries(t *testing.T) {
 			}
 			if bytes.Contains(logs.Bytes(), []byte("v2_tx_confirmed")) {
 				t.Fatal("failure logged as confirmed")
+			}
+			if tc.wantBuild > 0 {
+				failed := decodeV2EventLogs(t, logs.Bytes())["v2_tx_failed"]
+				if failed == nil || failed["phase"] == nil {
+					t.Fatal("transaction failure lacks phase event")
+				}
+				if tc.name == "confirmation query failure" && (failed["code"] != nil || failed["height"] != nil) {
+					t.Fatal("query failure fabricated a committed code or height")
+				}
+				if tc.name == "included nonzero code" && (failed["code"] != float64(9) || failed["height"] != float64(51)) {
+					t.Fatal("included failure lost committed code or height")
+				}
 			}
 		})
 	}

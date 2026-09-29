@@ -130,7 +130,8 @@ func (s *CertificateIssuerV2) Issue(ctx context.Context, request CertificateIssu
 		outcome = "allow"
 	}
 	logger.InfoContext(ctx, "v2_policy_evaluated", "component", "v2_certificate_issuer", "outcome", outcome,
-		"reason_code", decision.ReasonCode, "policy_id", decision.PolicyID, "policy_version", decision.PolicyVersion)
+		"reason_code", decision.ReasonCode, "subject", request.Subject,
+		"policy_id", decision.PolicyID, "policy_version", decision.PolicyVersion)
 	if !decision.Allow {
 		return CertificateIssueResultV2{}, &PolicyDeniedError{ReasonCode: decision.ReasonCode, Reason: decision.Reason}
 	}
@@ -168,9 +169,13 @@ func (s *CertificateIssuerV2) Issue(ctx context.Context, request CertificateIssu
 		return CertificateIssueResultV2{}, fmt.Errorf("marshal V2 certificate: %w", err)
 	}
 	logger.InfoContext(ctx, "v2_certificate_built", "component", "v2_certificate_issuer",
+		"subject", certificate.SignDoc.Intent.Subject, "sequence", certificate.SignDoc.Intent.Sequence,
 		"policy_id", certificate.SignDoc.PolicyID, "policy_version", certificate.SignDoc.PolicyVersion,
 		"issuer_set_id", certificate.SignDoc.IssuerSetID, "certificate_digest", hex.EncodeToString(digest[:]))
 	logger.InfoContext(ctx, "v2_certificate_signed", "component", "v2_certificate_issuer",
+		"subject", certificate.SignDoc.Intent.Subject, "sequence", certificate.SignDoc.Intent.Sequence,
+		"policy_id", certificate.SignDoc.PolicyID, "policy_version", certificate.SignDoc.PolicyVersion,
+		"issuer_set_id", certificate.SignDoc.IssuerSetID,
 		"signature_count", len(certificate.Signatures), "certificate_digest", hex.EncodeToString(digest[:]))
 	return CertificateIssueResultV2{
 		Intent: certificate.SignDoc.Intent, Certificate: certificate,

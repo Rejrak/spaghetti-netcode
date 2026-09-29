@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -77,8 +78,14 @@ func TestV2DemoConfiguration(t *testing.T) {
 		t.Fatal("missing secret not rejected safely")
 	}
 	var output bytes.Buffer
+	var logs bytes.Buffer
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	defer slog.SetDefault(previousLogger)
 	err = run(context.Background(), demoArgs(), &output, demoEnv)
-	if err == nil || strings.Contains(err.Error(), "test-secret-never-output") || strings.Contains(output.String(), "test-secret-never-output") {
+	if err == nil || strings.Contains(err.Error(), "test-secret-never-output") ||
+		strings.Contains(output.String(), "test-secret-never-output") ||
+		strings.Contains(logs.String(), "test-secret-never-output") {
 		t.Fatal("normal validation path exposed a secret or reached live infrastructure")
 	}
 }

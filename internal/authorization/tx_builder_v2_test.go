@@ -20,7 +20,7 @@ import (
 	v2pb "spaghetti/internal/authorization/pb/v2"
 )
 
-func signedV2Fixture(t *testing.T) (CertificateIssueResultV2, CosmosAccountSignerV2) {
+func signedV2Fixture(t testing.TB) (CertificateIssueResultV2, CosmosAccountSignerV2) {
 	t.Helper()
 	registry := codectypes.NewInterfaceRegistry()
 	cryptocodec.RegisterInterfaces(registry)

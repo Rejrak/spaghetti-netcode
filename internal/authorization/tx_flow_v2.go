@@ -58,42 +58,61 @@ func (s *V2OneTxService) IssueAndSubmitV2(ctx context.Context, request Certifica
 	if err != nil {
 		return V2SubmissionResult{}, fmt.Errorf("issue V2 certificate: %w", err)
 	}
+	common := []any{
+		"subject", issued.Intent.Subject, "sequence", issued.Intent.Sequence,
+		"policy_id", issued.Certificate.SignDoc.PolicyID, "policy_version", issued.Certificate.SignDoc.PolicyVersion,
+		"issuer_set_id", issued.Certificate.SignDoc.IssuerSetID,
+		"signature_count", len(issued.Certificate.Signatures),
+	}
+	logEvent := func(event, txHash string, fields ...any) {
+		logV2TxEvent(ctx, s.logger, event, txHash, issued.Digest, append(common, fields...)...)
+	}
 	signed, err := s.build(ctx, s.txConfig, issued, s.account)
 	if err != nil {
+		logEvent("v2_tx_failed", "", "phase", "build")
 		return V2SubmissionResult{}, fmt.Errorf("build signed V2 transaction: %w", err)
 	}
 	if len(signed.TxBytes) == 0 || signed.CertificateDigest != issued.Digest ||
 		signed.Subject != issued.Intent.Subject || signed.Sequence != issued.Intent.Sequence {
+		logEvent("v2_tx_failed", "", "phase", "build")
 		return V2SubmissionResult{}, fmt.Errorf("signed V2 transaction differs from issuance")
 	}
 	result := V2SubmissionResult{Subject: signed.Subject, Sequence: signed.Sequence, CertificateDigest: signed.CertificateDigest}
-	logV2TxEvent(ctx, s.logger, "v2_tx_built", "", result.CertificateDigest,
-		"subject", result.Subject, "sequence", result.Sequence)
+	expectedHash := sha256.Sum256(signed.TxBytes)
+	expectedTxHash := strings.ToUpper(hex.EncodeToString(expectedHash[:]))
+	logEvent("v2_tx_built", expectedTxHash)
 	broadcast, err := s.broadcaster.Broadcast(ctx, signed.TxBytes)
 	if err != nil {
-		logV2TxEvent(ctx, s.logger, "v2_tx_failed", "", result.CertificateDigest, "phase", "broadcast")
+		logEvent("v2_tx_failed", expectedTxHash, "phase", "broadcast")
 		return result, fmt.Errorf("broadcast V2 transaction: %w", err)
 	}
-	expectedHash := sha256.Sum256(signed.TxBytes)
 	if !strings.EqualFold(broadcast.TxHash, hex.EncodeToString(expectedHash[:])) {
+		logEvent("v2_tx_failed", expectedTxHash, "phase", "broadcast")
 		return result, fmt.Errorf("broadcast V2 tx hash differs from signed bytes")
 	}
 	result.TxHash = broadcast.TxHash
-	logV2TxEvent(ctx, s.logger, "v2_tx_broadcast", result.TxHash, result.CertificateDigest)
+	logEvent("v2_tx_broadcast", result.TxHash)
 	included, err := s.confirmer.WaitForInclusion(ctx, broadcast.TxHash)
 	result.Height, result.Code = included.Height, included.Code
+	logConfirmationFailure := func() {
+		fields := []any{"phase", "confirmation"}
+		if included.Height > 0 {
+			fields = append(fields, "height", included.Height)
+		}
+		if included.Height > 0 || included.Code != 0 {
+			fields = append(fields, "code", included.Code)
+		}
+		logEvent("v2_tx_failed", result.TxHash, fields...)
+	}
 	if err != nil {
-		logV2TxEvent(ctx, s.logger, "v2_tx_failed", result.TxHash, result.CertificateDigest,
-			"phase", "confirmation", "code", result.Code)
+		logConfirmationFailure()
 		return result, fmt.Errorf("confirm V2 transaction: %w", err)
 	}
 	if !strings.EqualFold(included.TxHash, broadcast.TxHash) || included.Height <= 0 || included.Code != 0 {
-		logV2TxEvent(ctx, s.logger, "v2_tx_failed", result.TxHash, result.CertificateDigest,
-			"phase", "confirmation", "code", result.Code)
+		logConfirmationFailure()
 		return result, fmt.Errorf("V2 inclusion result does not match broadcast")
 	}
 	result.TxHash = included.TxHash
-	logV2TxEvent(ctx, s.logger, "v2_tx_confirmed", result.TxHash, result.CertificateDigest,
-		"height", result.Height, "code", result.Code)
+	logEvent("v2_tx_confirmed", result.TxHash, "height", result.Height, "code", result.Code)
 	return result, nil
 }

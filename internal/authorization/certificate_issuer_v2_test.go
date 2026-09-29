@@ -110,6 +110,56 @@ func TestCertificateIssuerV2GoldenCompatibleIssuance(t *testing.T) {
 	}
 }
 
+func TestCertificateIssuerV2LogsOnlyPublicCorrelation(t *testing.T) {
+	service, request, source, _, _, _ := issuerV2Fixture(t)
+	const privateAttribute = "private-policy-attribute-marker"
+	const clientSecret = "private-keycloak-client-secret-marker"
+	source.attributes.Roles = []string{privateAttribute}
+	source.attributes.Perms = map[string]bool{clientSecret: true}
+	seed := bytes.Repeat([]byte{0x42}, ed25519.SeedSize) // TEST-ONLY
+	privateKey := ed25519.NewKeyFromSeed(seed)
+	signer, err := NewEd25519BatchSigner("issuer-alpha", privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.signers = []CertificateSignerV2{signer}
+	var logs bytes.Buffer
+	service.logger = slog.New(slog.NewJSONHandler(&logs, nil))
+	issued, err := service.Issue(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := decodeV2EventLogs(t, logs.Bytes())
+	if len(events) != 3 {
+		t.Fatalf("unexpected V2 issuance events: %v", events)
+	}
+	policyEvent := events["v2_policy_evaluated"]
+	if policyEvent == nil || policyEvent["subject"] != request.Subject || policyEvent["outcome"] != "allow" ||
+		policyEvent["policy_id"] != issued.Certificate.SignDoc.PolicyID || policyEvent["policy_version"] != "2" {
+		t.Fatal("policy evaluation correlation fields missing")
+	}
+	for _, name := range []string{"v2_certificate_built", "v2_certificate_signed"} {
+		event := events[name]
+		if event == nil || event["subject"] != request.Subject || event["sequence"] != float64(issued.Intent.Sequence) ||
+			event["policy_id"] != issued.Certificate.SignDoc.PolicyID ||
+			event["policy_version"] != float64(issued.Certificate.SignDoc.PolicyVersion) ||
+			event["issuer_set_id"] != float64(issued.Certificate.SignDoc.IssuerSetID) ||
+			event["certificate_digest"] != hex.EncodeToString(issued.Digest[:]) {
+			t.Fatalf("%s correlation fields missing: %v", name, event)
+		}
+	}
+	if events["v2_certificate_signed"]["signature_count"] != float64(1) {
+		t.Fatal("signed event lacks issuer signature count")
+	}
+	for _, forbidden := range []string{privateAttribute, clientSecret, hex.EncodeToString(seed),
+		hex.EncodeToString(privateKey), hex.EncodeToString(issued.Certificate.Signatures[0].Signature),
+		hex.EncodeToString(issued.CertificateBytes)} {
+		if bytes.Contains(logs.Bytes(), []byte(forbidden)) {
+			t.Fatal("V2 issuance log exposed secret or policy attribute contents")
+		}
+	}
+}
+
 func TestCertificateIssuerV2FailClosed(t *testing.T) {
 	boom := errors.New("unavailable")
 	for _, tc := range []struct {

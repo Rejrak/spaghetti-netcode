@@ -17,7 +17,7 @@ func TestProtocolV121AlphaCompatibility(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := string(bytes.TrimSpace(version)); got != "authz-protocol-v1.2.1" {
+	if got := string(bytes.TrimSpace(version)); got != "authz-protocol-v2.0.0" {
 		t.Fatalf("contract version: got %q", got)
 	}
 

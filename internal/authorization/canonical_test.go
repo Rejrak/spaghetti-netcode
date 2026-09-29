@@ -36,7 +36,7 @@ type canonicalFixture struct {
 	} `json:"issuers"`
 }
 
-func loadCanonicalFixture(t *testing.T) (canonicalFixture, BatchSignDoc) {
+func loadCanonicalFixture(t testing.TB) (canonicalFixture, BatchSignDoc) {
 	t.Helper()
 	data, err := os.ReadFile("../../docs/authz/testdata/v1.2/canonical-batch-sign-doc.json")
 	if err != nil {
