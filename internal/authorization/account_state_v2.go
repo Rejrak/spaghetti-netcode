@@ -52,13 +52,18 @@ func (p *AlphadAccountStateProviderV2) AccountState(ctx context.Context, subject
 	if err := json.Unmarshal(account["address"], &address); err != nil || address != subject {
 		return AlphaAccountStateV2{}, fmt.Errorf("account address mismatch")
 	}
-	accountNumber, err := parseCanonicalUintJSON(account["account_number"])
-	if err != nil {
-		return AlphaAccountStateV2{}, fmt.Errorf("invalid account number: %w", err)
+	var accountNumber, sequence uint64
+	if value, present := account["account_number"]; present {
+		accountNumber, err = parseCanonicalUintJSON(value)
+		if err != nil {
+			return AlphaAccountStateV2{}, fmt.Errorf("invalid account number: %w", err)
+		}
 	}
-	sequence, err := parseCanonicalUintJSON(account["sequence"])
-	if err != nil {
-		return AlphaAccountStateV2{}, fmt.Errorf("invalid account sequence: %w", err)
+	if value, present := account["sequence"]; present {
+		sequence, err = parseCanonicalUintJSON(value)
+		if err != nil {
+			return AlphaAccountStateV2{}, fmt.Errorf("invalid account sequence: %w", err)
+		}
 	}
 	statusJSON, err := p.run(ctx, "status")
 	if err != nil {
