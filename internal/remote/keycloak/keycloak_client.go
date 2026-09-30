@@ -31,16 +31,114 @@ type roleCache struct {
 // var globalRoleCache = &roleCache{byID: map[string]*roleRep{}}
 
 type KeycloakConfig struct {
-	BaseURL      string // es: https://keycloak.example.com
-	Realm        string // es: myrealm
-	ClientID     string // service account abilitato
-	ClientSecret string
-	Timeout      time.Duration // es: 10 * time.Second
+	BaseURL             string // es: https://keycloak.example.com
+	Realm               string // es: myrealm
+	ClientID            string // service account abilitato
+	ClientSecret        string
+	AccessTokenAudience string        // required audience for browser access tokens at issuer API
+	Timeout             time.Duration // es: 10 * time.Second
 
 	// Opzioni di lookup
 	// Se true, cerca l'utente anche per attributo "walletAddress"
 	EnableWalletAttributeLookup bool
 	WalletAttributeName         string // default: "walletAddress"
+}
+
+// ValidateTokenSubject introspects a browser access token and binds its Keycloak
+// user ID to the server-side wallet identity. False, false means invalid token.
+func (kc *KeycloakClient) ValidateTokenSubject(ctx context.Context, bearer, subject string) (bool, bool, error) {
+	if kc.cfg.AccessTokenAudience == "" || kc.cfg.Realm == "" || kc.cfg.ClientID == "" || kc.cfg.ClientSecret == "" || bearer == "" {
+		return false, false, fmt.Errorf("incomplete token validation configuration")
+	}
+	base := strings.TrimRight(kc.cfg.BaseURL, "/")
+	form := url.Values{"token": {bearer}, "client_id": {kc.cfg.ClientID}, "client_secret": {kc.cfg.ClientSecret}}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/realms/"+url.PathEscape(kc.cfg.Realm)+"/protocol/openid-connect/token/introspect", strings.NewReader(form.Encode()))
+	if err != nil {
+		return false, false, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := kc.http.Do(req)
+	if err != nil {
+		return false, false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return false, false, fmt.Errorf("token introspection failed: HTTP %d", resp.StatusCode)
+	}
+	var claims struct {
+		Active   bool            `json:"active"`
+		Issuer   string          `json:"iss"`
+		Subject  string          `json:"sub"`
+		Audience json.RawMessage `json:"aud"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 8192)).Decode(&claims); err != nil {
+		return false, false, err
+	}
+	if !claims.Active || claims.Issuer != base+"/realms/"+kc.cfg.Realm || claims.Subject == "" || !audienceContains(claims.Audience, kc.cfg.AccessTokenAudience) {
+		return false, false, nil
+	}
+	serviceToken, err := kc.ensureToken(ctx)
+	if err != nil {
+		return false, false, err
+	}
+	userReq, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/admin/realms/"+url.PathEscape(kc.cfg.Realm)+"/users/"+url.PathEscape(claims.Subject), nil)
+	if err != nil {
+		return false, false, err
+	}
+	userReq.Header.Set("Authorization", "Bearer "+serviceToken)
+	userResp, err := kc.http.Do(userReq)
+	if err != nil {
+		return false, false, err
+	}
+	defer userResp.Body.Close()
+	if userResp.StatusCode == http.StatusNotFound {
+		return false, false, nil
+	}
+	if userResp.StatusCode != http.StatusOK {
+		return false, false, fmt.Errorf("Keycloak user lookup failed: HTTP %d", userResp.StatusCode)
+	}
+	var user kcUser
+	if err := json.NewDecoder(io.LimitReader(userResp.Body, 8192)).Decode(&user); err != nil {
+		return false, false, err
+	}
+	if user.ID != claims.Subject {
+		return false, false, nil
+	}
+	if kc.cfg.EnableWalletAttributeLookup {
+		wallets := user.Attributes[kc.cfg.WalletAttributeName]
+		if len(wallets) != 1 || wallets[0] != subject {
+			return true, false, nil
+		}
+		resolved, err := kc.findUserByExactUsername(ctx, serviceToken, subject)
+		if err != nil {
+			return false, false, err
+		}
+		if resolved == nil {
+			resolved, err = kc.findUserByAttribute(ctx, serviceToken, kc.cfg.WalletAttributeName, subject)
+			if err != nil {
+				return false, false, err
+			}
+		}
+		return true, resolved != nil && resolved.ID == claims.Subject, nil
+	}
+	return true, user.Username == subject, nil
+}
+
+func audienceContains(raw json.RawMessage, expected string) bool {
+	var one string
+	if json.Unmarshal(raw, &one) == nil {
+		return one == expected
+	}
+	var many []string
+	if json.Unmarshal(raw, &many) != nil {
+		return false
+	}
+	for _, audience := range many {
+		if audience == expected {
+			return true
+		}
+	}
+	return false
 }
 
 type KeycloakClient struct {
