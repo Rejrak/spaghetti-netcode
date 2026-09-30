@@ -10,4 +10,6 @@ Run `go run ./cmd/authz-v2-issuer` with these server-side environment variables:
 
 Set `SPAGHETTI_KEYCLOAK_WALLET_ATTRIBUTE=1` when policy subjects use Keycloak `walletAddress` instead of usernames. Configure Keycloak to include the API audience in public-client access tokens. Issuer seed files contain hex Ed25519 seeds and must grant no group or world permissions. Configure trusted policy hash and issuer set to match Alpha. TLS is required by the command.
 
+For the local `alpha` realm and `authz-console` public client, set `SPAGHETTI_KEYCLOAK_AUDIENCE=authz-middleware`. Keep `SPAGHETTI_KEYCLOAK_WALLET_ATTRIBUTE` unset: the test user's username is the Cosmos subject.
+
 `POST https://<listen-address>/api/v2/certificates` accepts JSON with `subject`, `receiver`, `denom`, `amount`, `timeout_height`, `memo`, `fee_amount: [{denom, amount}]`, and `gas_limit`. All integer values are decimal strings. Send `Authorization: Bearer <Keycloak access token>`. The response contains V2 certificate protobuf bytes, signed intent, digest, height range, and authoritative account state. It never signs or broadcasts a user transaction.

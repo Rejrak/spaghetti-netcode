@@ -2,6 +2,7 @@
 
 main() {
   local address="${1:-${COSMOS_ADDRESS:-}}"
+  local password="${KEYCLOAK_TEST_USER_PASSWORD:-local-console-only}"
   local script_dir config_file query_output user_id
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   config_file="/tmp/kcadm-authz-e2e.config"
@@ -64,6 +65,18 @@ main() {
       printf 'failed to update local Keycloak test user\n' >&2
       return 1
     fi
+  fi
+
+  if ! docker compose -f "$script_dir/docker-compose.yml" exec -T keycloak \
+    /opt/keycloak/bin/kcadm.sh set-password \
+    -r alpha \
+    --userid "$user_id" \
+    --new-password "$password" \
+    --config "$config_file" >/dev/null; then
+    docker compose -f "$script_dir/docker-compose.yml" exec -T keycloak \
+      rm -f "$config_file" >/dev/null 2>&1
+    printf 'failed to set local Keycloak test user password\n' >&2
+    return 1
   fi
 
   if ! docker compose -f "$script_dir/docker-compose.yml" exec -T keycloak \
